@@ -69,8 +69,19 @@ function send(ch, data) {
 }
 
 // ---------- window ----------
+function uiScale() {
+  const v = Number(store.get('uiScale'));
+  return v >= 0.8 && v <= 1.5 ? v : 1;
+}
+function applyZoom() {
+  if (win && !win.isDestroyed()) win.webContents.setZoomFactor(uiScale());
+}
+
 function applySize() {
-  const [w, h] = SIZES[isMini() ? 'mini' : store.get('large') ? 'large' : 'compact'];
+  const [w0, h0] = SIZES[isMini() ? 'mini' : store.get('large') ? 'large' : 'compact'];
+  // Appearance → Size scales the whole pop-up (page zoom + window size together).
+  const scale = uiScale();
+  const w = Math.round(w0 * scale), h = Math.round(h0 * scale);
   const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   W = Math.min(w, wa.width - 24); H = Math.min(h, wa.height - 24);
   if (win) {
@@ -152,6 +163,7 @@ function createWindow() {
   rendererReady = false;
   win.on('show', () => { clearTimeout(discardTimer); setActive(true); pushAll(); applyMiniLook(); });
   win.once('ready-to-show', () => applyMiniLook());
+  win.webContents.on('did-finish-load', () => applyZoom());
   let moveTimer = null;
   win.on('moved', () => {
     if (!isMini()) return;
@@ -341,7 +353,8 @@ function setSettings(patch) {
   if ('mode' in patch || 'miniOpacity' in patch || 'clickThrough' in patch) applyMiniLook();
   if ('spotifyPort' in patch || 'spotifyClientId' in patch) send('spotify:status', spotify.status());
   if ('claudeDir' in patch || 'claudeLookbackHours' in patch) claude.scan();
-  if (('large' in patch || 'mode' in patch) && win) {
+  if ('uiScale' in patch) applyZoom();
+  if (('large' in patch || 'mode' in patch || 'uiScale' in patch) && win) {
     applySize(); positionWindow();
     if ('mode' in patch && !win.isVisible()) toggleWindow(true);
   }
@@ -747,6 +760,7 @@ app.whenReady().then(() => {
   if (MOCK) {
     startMock();
     store.set({ lyricsOffsets: { 'spotify|midnight city|m83': 500 }, mediaHotkeys: { playPause: 'CommandOrControl+Alt+Space', next: 'CommandOrControl+Alt+PageDown', volUp: 'CommandOrControl+Alt+=' } });
+    if (process.env.NP_LOOK) store.set(JSON.parse(process.env.NP_LOOK));
     store.set({ tab: process.env.NP_TAB || 'playing', large: process.env.NP_LARGE === '1', mode: process.env.NP_MINI === '1' ? 'mini' : 'full' });
     applySize();
     claude.scan();

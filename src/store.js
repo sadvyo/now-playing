@@ -29,6 +29,19 @@ const DEFAULTS = {
   miniOpacity: 1,             // mini player transparency (0.3 – 1)
   clickThrough: false,        // mini player lets clicks pass through to what's under it
   lyricsOffsets: {},          // song key -> ms to shift synced lyrics (positive = later)
+  // Appearance
+  theme: 'dark',              // 'dark' | 'light' | 'system'
+  accentMode: 'cover',        // 'cover' (from the album art) | 'fixed'
+  accentColor: '#1ed760',
+  background: 'cover',        // 'cover' blur | 'plain' | 'glass'
+  corners: 'round',           // 'round' | 'soft' | 'square'
+  uiScale: 1,                 // 0.9 | 1 | 1.15 | 1.3
+  layout: 'lyrics',           // Playing tab: 'lyrics' | 'cover' (big artwork)
+  lyricsSize: 'm',            // 's' | 'm' | 'l'
+  showUpNext: true,
+  showSources: true,
+  miniLyrics: true,
+  outline: false,
   autoDownload: true,         // download updates in the background
   updateRepo: '',             // override GitHub repo for updates (owner/name)
   miniPos: null,
