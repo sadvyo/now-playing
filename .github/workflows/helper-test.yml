@@ -1,0 +1,48 @@
+name: Helper test
+
+# Builds the native helper on Windows and runs it, for every branch except main.
+on:
+  push:
+    branches-ignore: [main]
+    paths: ['helper/**', '.github/workflows/helper-test.yml']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build (Native AOT)
+        run: dotnet publish helper/NowPlayingHelper.csproj -c Release -o helper/bin
+      - name: Size
+        shell: pwsh
+        run: Get-Item helper/bin/NowPlayingHelper.exe | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,2)}}
+      - name: Self-test (WinRT + Core Audio)
+        shell: pwsh
+        run: |
+          & helper/bin/NowPlayingHelper.exe --selftest
+          if ($LASTEXITCODE -ne 0) { throw "selftest failed: $LASTEXITCODE" }
+      - name: Protocol test (stdout JSON, stdin commands, clean exit)
+        shell: pwsh
+        run: |
+          $psi = New-Object System.Diagnostics.ProcessStartInfo 'helper/bin/NowPlayingHelper.exe', '--rate 500'
+          $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.UseShellExecute = $false
+          $p = [System.Diagnostics.Process]::Start($psi)
+          $first = $p.StandardOutput.ReadLine(); Write-Host "line1: $first"
+          if ($first -notmatch '"ready":true') { throw 'no ready line' }
+          $p.StandardInput.WriteLine('{"action":"rate","ms":300}')
+          $p.StandardInput.WriteLine('{"action":"toggle"}')
+          $p.StandardInput.WriteLine('{"action":"volume","app":"Spotify.exe","level":40}')
+          $p.StandardInput.WriteLine('not json at all')
+          $second = $p.StandardOutput.ReadLine(); Write-Host "line2: $second"
+          $j = $second | ConvertFrom-Json
+          if ($null -eq $j.sessions) { throw 'state line has no sessions array' }
+          Start-Sleep -Milliseconds 1500
+          $p.Refresh()
+          Write-Host ("working set: {0:N1} MB, private: {1:N1} MB" -f ($p.WorkingSet64/1MB), ($p.PrivateMemorySize64/1MB))
+          $p.StandardInput.Close()
+          if (-not $p.WaitForExit(5000)) { $p.Kill(); throw 'helper did not exit when stdin closed' }
+          Write-Host "exit code: $($p.ExitCode)"
