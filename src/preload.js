@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('np', {
   spotifyDisconnect: () => ipcRenderer.invoke('spotify:disconnect'),
   spotifyLike: () => ipcRenderer.invoke('spotify:like'),
   control: (action, positionMs) => ipcRenderer.invoke('media:control', { action, positionMs }),
+  setVolume: (level) => ipcRenderer.invoke('media:volume', level),
   dismissChat: (id) => ipcRenderer.invoke('chats:dismiss', id),
   clearChats: () => ipcRenderer.invoke('chats:clear'),
   installBridge: () => ipcRenderer.invoke('bridge:install'),

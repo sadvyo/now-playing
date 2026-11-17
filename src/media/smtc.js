@@ -92,8 +92,20 @@ class SMTC extends EventEmitter {
     this._spawn();
   }
 
+  // Native helper (NowPlayingHelper.exe, ~10 MB) when it's bundled and healthy;
+  // otherwise the PowerShell script. Both speak the same JSON-lines format.
+  helperPath() {
+    const { app } = require('electron');
+    const p = app.isPackaged
+      ? path.join(process.resourcesPath, 'helper', 'NowPlayingHelper.exe')
+      : path.join(__dirname, '..', '..', 'helper', 'bin', 'NowPlayingHelper.exe');
+    return fs.existsSync(p) ? p : null;
+  }
+
   _spawn() {
     if (this.stopped) return;
+    if (this.backend !== 'powershell' && this.helperPath()) { this._spawnNative(); return; }
+    this.backend = 'powershell';
     const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     this.proc = spawn(ps, [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -113,6 +125,35 @@ class SMTC extends EventEmitter {
     });
   }
 
+  _spawnNative() {
+    this.backend = 'native';
+    this.ready = false;
+    const started = Date.now();
+    const proc = spawn(this.helperPath(), ['--rate', String(this.rate || 3000)], { windowsHide: true });
+    this.proc = proc;
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (chunk) => this._onData(chunk));
+    proc.stderr.setEncoding('utf8');
+    proc.stderr.on('data', (d) => this.log('helper stderr: ' + String(d).slice(0, 800)));
+    proc.stdin.on('error', () => {});
+    proc.on('error', (e) => { this.error = e.message; this.log('helper error: ' + e.message); });
+    // No "ready" line within 10 s counts as a failure.
+    const readyTimer = setTimeout(() => { if (!this.ready) { this.log('helper not ready in 10 s'); try { proc.kill(); } catch {} } }, 10000);
+    proc.on('exit', (code) => {
+      clearTimeout(readyTimer);
+      if (this.proc === proc) this.proc = null;
+      if (this.stopped) return;
+      const quick = !this.ready || Date.now() - started < 20000;
+      if (quick) this.helperFailures = (this.helperFailures || 0) + 1;
+      this.log(`helper exited ${code}${quick ? ` (failure ${this.helperFailures})` : ''}`);
+      if (this.helperFailures >= 3) {
+        this.log('native helper keeps failing: switching to PowerShell');
+        this.backend = 'powershell';
+      }
+      setTimeout(() => this._spawn(), quick ? 1500 : 1000);
+    });
+  }
+
   _onData(chunk) {
     this.buf += chunk;
     let i;
@@ -125,7 +166,9 @@ class SMTC extends EventEmitter {
   }
 
   _onState(msg) {
+    if (msg.ready) { this.ready = true; this.log(`media helper: ${msg.helper || 'native'} v${msg.version || '?'}`); return; }
     if (msg.error) { this.error = msg.error; return; }
+    if (msg.audioErr && msg.audioErr !== this.audioErr) { this.audioErr = msg.audioErr; this.log('volume: ' + msg.audioErr); }
     this.restarts = 0;
     this.error = null;
     const offset = Date.now() - (msg.now || Date.now()); // clock skew guard (normally ~0)
@@ -162,6 +205,8 @@ class SMTC extends EventEmitter {
         canPrev: !!s.canPrev,
         canSeek: !!s.canSeek,
         isCurrent: s.app === msg.current,
+        volume: typeof s.volume === 'number' ? s.volume : null, // only the native helper reports volume
+        muted: !!s.muted,
       };
     });
     const live = new Set(list.map((x) => x && x.app));
@@ -177,6 +222,11 @@ class SMTC extends EventEmitter {
 
   command(action, app, extra = {}) {
     if (!this.available) return;
+    if (this.backend === 'native') {
+      if (this.proc && this.proc.stdin.writable) this.proc.stdin.write(JSON.stringify({ action, app, ...extra }) + '\n');
+      return;
+    }
+    if (action === 'volume') return; // PowerShell fallback can't change volume
     const name = `${Date.now()}-${String(++this.cmdSeq).padStart(6, '0')}`;
     const tmp = path.join(this.cmdFile, name + '.tmp');
     fs.writeFileSync(tmp, JSON.stringify({ action, app, ...extra }));
@@ -185,7 +235,10 @@ class SMTC extends EventEmitter {
 
   stop() {
     this.stopped = true;
-    if (this.proc) try { this.proc.kill(); } catch {}
+    if (this.proc) {
+      try { this.proc.stdin?.end(); } catch {} // the helper exits when its input closes
+      try { this.proc.kill(); } catch {}
+    }
   }
 }
 

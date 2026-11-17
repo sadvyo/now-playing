@@ -95,7 +95,15 @@
         <svg viewBox="0 0 24 24" id="icoPause" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" class="fillsvg" /></svg>
       </button>
       <button class="ctl" id="nextBtn" title="Next"><svg viewBox="0 0 24 24"><path d="M18 5v14M5 5l10 7-10 7z" class="fillsvg" /></svg></button>
-      <span class="ctl-spacer"></span>
+      <div class="vol" id="vol">
+        <button class="ctl vol-btn" id="volBtn" title="Volume">
+          <svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z" class="fillsvg" /><path id="volWave1" d="M16 9.5a3.5 3.5 0 0 1 0 5" /><path id="volWave2" d="M18.5 7a7 7 0 0 1 0 10" /><path id="volMuteX" d="M16 9l5 6M21 9l-5 6" hidden /></svg>
+        </button>
+        <div class="vol-pop" id="volPop" hidden>
+          <input type="range" id="volRange" min="0" max="100" step="1" value="50" aria-label="Volume" />
+          <span class="vol-val" id="volVal">50</span>
+        </div>
+      </div>
     </div>
 
     <div class="sources" id="sources"></div>

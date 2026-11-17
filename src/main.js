@@ -9,6 +9,7 @@ const { ClaudeChats } = require('./claude/chats');
 const { ClaudeDesktop } = require('./claude/desktop');
 const { findArtwork } = require('./media/artwork');
 const { Updater } = require('./updater');
+const { accentFor, cachedAccent } = require('./media/accent');
 const PKG = require('../package.json');
 const fs = require('fs');
 
@@ -393,13 +394,31 @@ function withArt(t) {
   return t;
 }
 
+// Short cache key for an image (data: URLs can be ~30 KB long).
+const artKey = (a) => (a.startsWith('data:') ? `d${a.length}:${a.slice(-48)}` : a);
+function withAccent(t) {
+  if (!t || !t.art) return t;
+  const k = artKey(t.art);
+  const c = cachedAccent(k);
+  if (c !== undefined) { t.accent = c; return t; }
+  accentFor(t.art, k).then(() => recompute()).catch(() => {}); // de-duplicated inside
+  return t;
+}
+
 function recompute() {
-  const t = withArt(pickTrack());
+  const t = withAccent(withArt(pickTrack()));
   // If the Web API track and the Windows Spotify session are the same song, enrich
   // with the desktop app's controls (works without Premium) and local position.
   if (t && t.source === 'spotify') {
     const local = (smtc?.sessions || []).find((x) => /spotify/i.test(x.app) && x.title === t.title);
     if (local) t.localApp = local.app;
+  }
+  if (t) {
+    const localApp = t.source === 'system' ? t.app : t.localApp;
+    const local = localApp ? (smtc?.sessions || []).find((x) => x.app === localApp) : null;
+    if (local && typeof local.volume === 'number') { t.volumeVia = 'local'; t.volumeApp = local.app; t.volume = local.volume; t.muted = local.muted; }
+    else if (t.source === 'spotify' && typeof t.volume === 'number') { t.volumeVia = 'spotify'; }
+    else { t.volumeVia = null; t.volume = null; }
   }
   nowPlaying = t;
   const key = trackKey(t);
@@ -449,7 +468,8 @@ function pushAll() {
 // ---------- Claude alerts ----------
 function ensureToastShortcut() {
   // Windows only shows toasts for apps with a Start-menu shortcut carrying our AppUserModelID.
-  if (process.platform !== 'win32' || !app.isPackaged) return;
+  // The installer creates that shortcut itself; the portable .exe needs us to.
+  if (process.platform !== 'win32' || !app.isPackaged || !process.env.PORTABLE_EXECUTABLE_FILE) return;
   try {
     const lnk = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Now Playing.lnk');
     const target = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
@@ -577,6 +597,15 @@ function registerIpc() {
   });
   ipcMain.handle('spotify:disconnect', () => { spotify.disconnect(); recompute(); return spotify.status(); });
 
+  // Volume: the playing app's own volume on this PC (native helper), or the
+  // Spotify Connect device volume when Spotify plays somewhere else.
+  ipcMain.handle('media:volume', async (_e, level) => {
+    const t = nowPlaying;
+    if (!t) return;
+    const v = Math.max(0, Math.min(100, Math.round(Number(level) || 0)));
+    if (t.volumeVia === 'local') smtc.command('volume', t.volumeApp, { level: v });
+    else if (t.volumeVia === 'spotify') await spotify.setVolume(v);
+  });
   ipcMain.handle('media:control', async (_e, { action, positionMs }) => {
     const t = nowPlaying;
     if (!t) return;
@@ -606,7 +635,7 @@ function startMock() {
     ],
   };
   smtc.sessions = [
-    { source: 'system', app: 'Spotify.exe', appName: 'Spotify', title: 'Midnight City', artist: 'M83', isPlaying: true, status: 'Playing', durationMs: 243000, positionMs: 62000, sampledAt: now },
+    { source: 'system', app: 'Spotify.exe', appName: 'Spotify', title: 'Midnight City', artist: 'M83', isPlaying: true, status: 'Playing', durationMs: 243000, positionMs: 62000, sampledAt: now, volume: 64, muted: false },
     { source: 'system', app: 'msedge', appName: 'Edge', title: 'Stage lighting basics — DMX in 10 minutes', artist: 'LightingTV', isPlaying: false, status: 'Paused', durationMs: 612000, positionMs: 140000, sampledAt: now },
   ];
   lyricsState = {
@@ -698,7 +727,12 @@ app.whenReady().then(() => {
   });
   updater.start();
   if (updater.justUpdated && Notification.isSupported()) {
-    new Notification({ title: `Now Playing updated to ${app.getVersion()}`, body: 'Running the new version.', icon: ICON, silent: true }).show();
+    const installed = updater.kind() === 'installed';
+    new Notification({
+      title: `Now Playing updated to ${app.getVersion()}`,
+      body: installed ? "It's installed now — find it in the Start menu. Updates keep coming automatically." : 'Running the new version.',
+      icon: ICON, silent: true,
+    }).show();
   }
   desktop = new ClaudeDesktop(app, log);
   try {

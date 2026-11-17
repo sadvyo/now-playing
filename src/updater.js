@@ -11,6 +11,8 @@ const EventEmitter = require('events');
 const CHECK_EVERY = 6 * 3600 * 1000;
 const UA = 'NowPlayingPopup-updater';
 const OLD_NAME = /^NowPlaying-\d+\.\d+\.\d+-portable\.exe$/i;
+const SETUP = /^NowPlaying-Setup-\d+\.\d+\.\d+\.exe$/i;
+const PORTABLE = /-portable\.exe$/i;
 
 function rmQuiet(f) { try { fs.rmSync(f, { force: true }); } catch {} }
 
@@ -35,6 +37,9 @@ class Updater extends EventEmitter {
 
   repo() { return (this.store.get('updateRepo') || this.defaultRepo || '').trim(); }
   exePath() { return process.env.PORTABLE_EXECUTABLE_FILE || null; }
+  // 'portable' (single .exe), 'installed' (via the setup), or 'dev' (not packaged).
+  kind() { return this.exePath() ? 'portable' : this.app.isPackaged ? 'installed' : 'dev'; }
+  tempDir() { return path.join(this.app.getPath('temp'), 'now-playing-update'); }
 
   _set(patch) {
     this.state = { ...this.state, ...patch, current: this.app.getVersion(), repo: this.repo() };
@@ -43,6 +48,7 @@ class Updater extends EventEmitter {
 
   start() {
     this.cleanupOld();
+    this.noteVersion();
     if (!this.repo()) { this._set({ status: 'off' }); return; }
     setTimeout(() => this.check(false), 45 * 1000); // not during startup
     this.timer = setInterval(() => this.check(false), CHECK_EVERY);
@@ -64,12 +70,19 @@ class Updater extends EventEmitter {
       if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
       const rel = await res.json();
       const version = String(rel.tag_name || '').replace(/^v/, '');
-      const asset = (rel.assets || []).find((a) => /portable\.exe$/i.test(a.name));
-      if (!version || !asset) throw new Error('The latest release has no portable .exe.');
-      const info = { latest: version, notes: String(rel.body || '').split('\n').find((l) => l.trim()) || '', checkedAt: Date.now() };
-      if (!newer(version, this.app.getVersion())) { this._set({ status: 'up-to-date', ...info }); return this.state; }
-      this.log(`update available: ${version}`);
-      if (!this.exePath()) { this._set({ status: 'available', ...info, error: 'Running outside the portable .exe; download it manually.' }); return this.state; }
+      const assets = rel.assets || [];
+      const setup = assets.find((a) => SETUP.test(a.name));
+      const portable = assets.find((a) => PORTABLE.test(a.name));
+      const kind = this.kind();
+      // Installed copies update with the setup. The portable .exe moves over to the
+      // installed version as soon as a setup exists (even for the same version).
+      const asset = kind === 'portable' ? (setup || portable) : setup;
+      if (!version || !asset) throw new Error('The latest release has no file for this kind of install.');
+      const migrate = kind === 'portable' && asset === setup && !newer(this.app.getVersion(), version);
+      const info = { latest: version, notes: String(rel.body || '').split('\n').find((l) => l.trim()) || '', checkedAt: Date.now(), migrate };
+      if (!newer(version, this.app.getVersion()) && !migrate) { this._set({ status: 'up-to-date', ...info }); return this.state; }
+      this.log(`update available: ${version}${migrate ? ' (switching to the installed version)' : ''}`);
+      if (kind === 'dev') { this._set({ status: 'available', ...info, error: 'Not a packaged build.' }); return this.state; }
       if (!manual && this.store.get('autoDownload') === false) { this._set({ status: 'available', ...info }); return this.state; }
       await this._download(asset, info);
     } catch (e) {
@@ -88,7 +101,10 @@ class Updater extends EventEmitter {
   }
 
   async _download(asset, info) {
-    const dir = path.dirname(this.exePath());
+    const installer = SETUP.test(asset.name);
+    info = { ...info, installer };
+    const dir = installer ? this.tempDir() : path.dirname(this.exePath());
+    fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, asset.name);
     const part = file + '.part';
     if (fs.existsSync(file) && fs.statSync(file).size === asset.size && (await this._verify(file, asset))) {
@@ -137,19 +153,62 @@ class Updater extends EventEmitter {
     const old = this.exePath();
     if (this.state.status !== 'ready' || !file || !fs.existsSync(file)) return false;
     this.log(`applying update ${this.state.latest}`);
+    if (this.state.installer) {
+      // Silent per-user install; the setup closes this copy, installs, then starts the new one.
+      if (old) this.store.set({ migratedFrom: old });
+      return this._launch(file, ['/S', '--force-run'], () => { if (old) this.store.set({ migratedFrom: null }); });
+    }
     if (this.store.get('launchAtStartup')) {
       this.app.setLoginItemSettings({ openAtLogin: true, path: file, args: ['--hidden'] });
     }
+    return this._launch(file, old ? ['--updated-from', old] : []);
+  }
+
+  // Start the new version / installer and quit only once it has really started.
+  // If Windows refuses to run it, stay open and say so instead of crashing.
+  _launch(file, args, onFail) {
     try { this.app.releaseSingleInstanceLock(); } catch {}
-    const child = spawn(file, old ? ['--updated-from', old] : [], { detached: true, stdio: 'ignore' });
-    child.unref();
-    this.app.isQuitting = true;
-    setTimeout(() => this.app.quit(), 200);
+    const fail = (msg) => {
+      this.log('update launch failed: ' + msg);
+      try { this.app.requestSingleInstanceLock(); } catch {}
+      if (onFail) onFail();
+      this._set({ status: 'error', error: `Couldn't start the update (${msg}). Try again, or run it from ${path.dirname(file)}.` });
+    };
+    let child;
+    try { child = spawn(file, args, { detached: true, stdio: 'ignore', windowsHide: false }); }
+    catch (e) { fail(e.message); return false; }
+    child.once('error', (e) => fail(e.code || e.message));
+    child.once('spawn', () => {
+      child.unref();
+      this.app.isQuitting = true;
+      setTimeout(() => this.app.quit(), 300);
+    });
     return true;
+  }
+
+  // Remember the version so the first run after an update can say "Updated to …".
+  noteVersion() {
+    const prev = this.store.get('lastRunVersion');
+    const cur = this.app.getVersion();
+    if (prev && newer(cur, prev)) this.justUpdated = true;
+    if (prev !== cur) this.store.set({ lastRunVersion: cur });
   }
 
   // In the new version: remove the previous .exe once it has exited.
   cleanupOld() {
+    // Installed after running portable: delete the old portable .exe and spent installers.
+    if (this.kind() === 'installed') {
+      try { for (const f of fs.readdirSync(this.tempDir())) if (SETUP.test(f) || f.endsWith('.part')) rmQuiet(path.join(this.tempDir(), f)); } catch {}
+      const prev = this.store.get('migratedFrom');
+      if (prev && OLD_NAME.test(path.basename(prev))) {
+        let tries = 0;
+        const attempt = () => fs.rm(prev, { force: true }, (err) => {
+          if (!err) { this.log('removed portable copy ' + prev); this.store.set({ migratedFrom: null }); this.migrated = true; return; }
+          if (++tries < 6) setTimeout(attempt, 10000);
+        });
+        setTimeout(attempt, 8000);
+      } else if (prev) this.store.set({ migratedFrom: null });
+    }
     const i = process.argv.indexOf('--updated-from');
     if (i < 0) return;
     const old = process.argv[i + 1];
