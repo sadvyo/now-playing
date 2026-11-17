@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "mock": "NP_MOCK=1 electron .",
-    "dist:win": "electron-builder --win --x64 --dir && node scripts/set-icon.mjs \"dist/win-unpacked/Now Playing.exe\" assets/icon.ico && electron-builder --win nsis portable --x64 --prepackaged dist/win-unpacked",
+    "dist:win": "electron-builder --win --x64 --dir --publish never && node scripts/set-icon.mjs \"dist/win-unpacked/Now Playing.exe\" assets/icon.ico && electron-builder --win nsis portable --x64 --prepackaged dist/win-unpacked --publish never",
     "build:helper": "dotnet publish helper/NowPlayingHelper.csproj -c Release -o helper/bin"
   },
   "keywords": [],
