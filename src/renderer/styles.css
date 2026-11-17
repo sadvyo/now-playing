@@ -123,8 +123,9 @@ svg .fillsvg { fill: currentColor; stroke: none; }
 .chip.playing i { background: var(--spotify); }
 
 /* ---------- lyrics ---------- */
+.lyrics-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 6px 10px 10px; }
 .lyrics {
-  position: relative; flex: 1; min-height: 0; margin: 6px 10px 10px; border-radius: 14px;
+  position: relative; flex: 1; min-height: 0; margin: 0; border-radius: 14px;
   background: rgba(0,0,0,.22); overflow-y: auto; scroll-behavior: smooth; scrollbar-width: none;
   -webkit-mask-image: linear-gradient(transparent, #000 14%, #000 82%, transparent);
 }
@@ -395,3 +396,31 @@ select option { background: #1b1c22; }
 #volRange { -webkit-appearance: none; appearance: none; width: 130px; height: 4px; padding: 0; border: 0; border-radius: 4px; cursor: pointer;
   background: linear-gradient(90deg, var(--np-accent) var(--fill, 50%), rgba(255,255,255,.15) var(--fill, 50%)); }
 #volRange::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+
+/* ---------- v1.8: lyrics timing ---------- */
+.ly-sync { position: absolute; right: 8px; bottom: 8px; z-index: 2; display: flex; align-items: center; gap: 2px; padding: 3px;
+  border-radius: 9px; background: rgba(20,21,26,.88); border: 1px solid rgba(255,255,255,.08); opacity: 0; transition: opacity .2s; }
+.lyrics-wrap:hover .ly-sync, .ly-sync.shifted { opacity: 1; }
+.ly-sync button { min-width: 24px; height: 22px; border-radius: 6px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.ly-sync button:hover { background: rgba(255,255,255,.1); color: var(--text); }
+#lyOff { min-width: 46px; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ly-sync.shifted #lyOff { color: var(--np-accent); }
+
+/* ---------- shortcuts ---------- */
+.group-title .hint { font-style: normal; text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--faint); margin-left: 4px; }
+.hk-list { display: flex; flex-direction: column; gap: 6px; }
+.hk-row { display: grid; grid-template-columns: 1fr 150px 22px; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.hk-row input { font-size: 12px; padding: 6px 8px; cursor: pointer; text-align: center; }
+.hk-row input.rec { border-color: var(--np-accent); color: var(--text); }
+.hk-row input.bad { border-color: #ff8a80; }
+.hk-row .x { width: 22px; height: 22px; border-radius: 6px; color: var(--faint); font-size: 13px; }
+.hk-row .x:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.hk-row .taken { grid-column: 1 / -1; font-size: 11px; color: #ffb4a8; margin-top: -3px; }
+#miniOpVal { font-style: normal; color: var(--muted); }
+#miniOpacity { -webkit-appearance: none; appearance: none; height: 4px; padding: 0; border: 0; border-radius: 4px; background: rgba(255,255,255,.15); }
+#miniOpacity::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
+.shell.ct-live { box-shadow: 0 0 0 2px var(--np-accent) inset, 0 18px 50px rgba(0,0,0,.55); }
+
+/* mini player transparency (drawn by the page, so it works the same everywhere) */
+.shell[data-mode="mini"] { opacity: var(--mini-op, 1); transition: opacity .2s ease; }
+.shell[data-mode="mini"]:not(.click-through):hover, .shell.ct-live { opacity: 1; }

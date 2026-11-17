@@ -25,6 +25,10 @@ const DEFAULTS = {
   large: false,               // bigger window
   mode: 'full',               // 'full' | 'mini' (compact player bar)
   freeMemory: true,           // close the hidden window after a few minutes
+  mediaHotkeys: {},           // { playPause, next, previous, volUp, volDown, clickThrough } accelerators
+  miniOpacity: 1,             // mini player transparency (0.3 – 1)
+  clickThrough: false,        // mini player lets clicks pass through to what's under it
+  lyricsOffsets: {},          // song key -> ms to shift synced lyrics (positive = later)
   autoDownload: true,         // download updates in the background
   updateRepo: '',             // override GitHub repo for updates (owner/name)
   miniPos: null,

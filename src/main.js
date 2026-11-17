@@ -150,7 +150,8 @@ function createWindow() {
     }, 120);
   });
   rendererReady = false;
-  win.on('show', () => { clearTimeout(discardTimer); setActive(true); pushAll(); });
+  win.on('show', () => { clearTimeout(discardTimer); setActive(true); pushAll(); applyMiniLook(); });
+  win.once('ready-to-show', () => applyMiniLook());
   let moveTimer = null;
   win.on('moved', () => {
     if (!isMini()) return;
@@ -211,6 +212,7 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: 'Show / hide', click: () => toggleWindow() },
     { label: 'Mini player', type: 'checkbox', checked: s.mode === 'mini', click: (i) => setSettings({ mode: i.checked ? 'mini' : 'full' }) },
+    ...(s.mode === 'mini' ? [{ label: 'Click-through mini player', type: 'checkbox', checked: !!s.clickThrough, click: (i) => setSettings({ clickThrough: i.checked }) }] : []),
     { type: 'separator' },
     { label: 'Keep on screen (pin)', type: 'checkbox', checked: !!s.pinned, click: (i) => setSettings({ pinned: i.checked }) },
     { label: 'Start with Windows', type: 'checkbox', checked: !!s.launchAtStartup, click: (i) => setSettings({ launchAtStartup: i.checked }) },
@@ -291,12 +293,52 @@ function applyHotkey(prev) {
   try { return globalShortcut.register(hk, () => toggleWindow()); } catch { return false; }
 }
 
+// ---------- global media hotkeys ----------
+const MEDIA_HOTKEYS = ['playPause', 'next', 'previous', 'volUp', 'volDown', 'clickThrough'];
+let mediaRegistered = [];
+let hotkeyStatus = {};
+function applyMediaHotkeys() {
+  for (const a of mediaRegistered) { try { globalShortcut.unregister(a); } catch {} }
+  mediaRegistered = [];
+  hotkeyStatus = {};
+  const hk = store.get('mediaHotkeys') || {};
+  for (const name of MEDIA_HOTKEYS) {
+    const accel = hk[name];
+    if (!accel) continue;
+    let ok = false;
+    try { ok = globalShortcut.register(accel, () => onMediaHotkey(name)); } catch { ok = false; }
+    hotkeyStatus[name] = ok; // false = another app (or another of our shortcuts) has it
+    if (ok) mediaRegistered.push(accel);
+  }
+}
+function onMediaHotkey(name) {
+  if (name === 'playPause') mediaControl('toggle');
+  else if (name === 'next') mediaControl('next');
+  else if (name === 'previous') mediaControl('previous');
+  else if (name === 'volUp' || name === 'volDown') {
+    const t = nowPlaying;
+    if (t && typeof t.volume === 'number') setVolumeLevel(t.volume + (name === 'volUp' ? 5 : -5));
+  } else if (name === 'clickThrough') setSettings({ clickThrough: !store.get('clickThrough') });
+}
+
+// ---------- mini player look: transparency + click-through ----------
+function applyMiniLook() {
+  if (!win || win.isDestroyed()) return;
+  const mini = isMini();
+  // (Transparency is drawn by the page itself: see .shell[data-mode="mini"] in styles.css.)
+  const through = mini && !!store.get('clickThrough');
+  if (through) win.setIgnoreMouseEvents(true, { forward: true }); // mouse moves still reach us (Ctrl-hover)
+  else win.setIgnoreMouseEvents(false);
+}
+
 function setSettings(patch) {
   const prevHotkey = store.get('hotkey');
   store.set(patch);
   if ('launchAtStartup' in patch && app.isPackaged) setLoginItem(!!patch.launchAtStartup);
   let hotkeyOk = true;
   if ('hotkey' in patch) hotkeyOk = applyHotkey(prevHotkey);
+  if ('mediaHotkeys' in patch || 'hotkey' in patch) applyMediaHotkeys();
+  if ('mode' in patch || 'miniOpacity' in patch || 'clickThrough' in patch) applyMiniLook();
   if ('spotifyPort' in patch || 'spotifyClientId' in patch) send('spotify:status', spotify.status());
   if ('claudeDir' in patch || 'claudeLookbackHours' in patch) claude.scan();
   if (('large' in patch || 'mode' in patch) && win) {
@@ -304,7 +346,7 @@ function setSettings(patch) {
     if ('mode' in patch && !win.isVisible()) toggleWindow(true);
   }
   recompute();
-  const out = { ...store.publicSettings(), hotkeyOk };
+  const out = { ...store.publicSettings(), hotkeyOk, hotkeyStatus };
   send('settings', out);
   return out;
 }
@@ -551,6 +593,25 @@ function installBridge() {
   return out;
 }
 
+async function mediaControl(action, positionMs) {
+  const t = nowPlaying;
+  if (!t) return;
+  if (t.source === 'spotify') {
+    if (t.localApp && action !== 'seek') smtc.command(action, t.localApp);
+    else await spotify.control(action, { positionMs });
+  } else {
+    smtc.command(action, t.app, { positionMs });
+  }
+}
+
+async function setVolumeLevel(level) {
+  const t = nowPlaying;
+  if (!t) return;
+  const v = Math.max(0, Math.min(100, Math.round(Number(level) || 0)));
+  if (t.volumeVia === 'local') { smtc.command('volume', t.volumeApp, { level: v }); t.volume = v; recompute(); }
+  else if (t.volumeVia === 'spotify') await spotify.setVolume(v);
+}
+
 // ---------- IPC ----------
 function registerIpc() {
   ipcMain.handle('settings:get', () => store.publicSettings());
@@ -599,22 +660,13 @@ function registerIpc() {
 
   // Volume: the playing app's own volume on this PC (native helper), or the
   // Spotify Connect device volume when Spotify plays somewhere else.
-  ipcMain.handle('media:volume', async (_e, level) => {
-    const t = nowPlaying;
-    if (!t) return;
-    const v = Math.max(0, Math.min(100, Math.round(Number(level) || 0)));
-    if (t.volumeVia === 'local') smtc.command('volume', t.volumeApp, { level: v });
-    else if (t.volumeVia === 'spotify') await spotify.setVolume(v);
-  });
-  ipcMain.handle('media:control', async (_e, { action, positionMs }) => {
-    const t = nowPlaying;
-    if (!t) return;
-    if (t.source === 'spotify') {
-      if (t.localApp && action !== 'seek') smtc.command(action, t.localApp);
-      else await spotify.control(action, { positionMs });
-    } else {
-      smtc.command(action, t.app, { positionMs });
-    }
+  ipcMain.handle('media:volume', (_e, level) => setVolumeLevel(level));
+  ipcMain.handle('media:control', (_e, { action, positionMs }) => mediaControl(action, positionMs));
+  ipcMain.handle('hotkeys:status', () => hotkeyStatus);
+  // Click-through mini player: hold Ctrl over it to use it again.
+  ipcMain.handle('window:interactive', (_e, on) => {
+    if (!win || !isMini() || !store.get('clickThrough')) return;
+    if (on) win.setIgnoreMouseEvents(false); else win.setIgnoreMouseEvents(true, { forward: true });
   });
 }
 
@@ -694,6 +746,7 @@ app.whenReady().then(() => {
 
   if (MOCK) {
     startMock();
+    store.set({ lyricsOffsets: { 'spotify|midnight city|m83': 500 }, mediaHotkeys: { playPause: 'CommandOrControl+Alt+Space', next: 'CommandOrControl+Alt+PageDown', volUp: 'CommandOrControl+Alt+=' } });
     store.set({ tab: process.env.NP_TAB || 'playing', large: process.env.NP_LARGE === '1', mode: process.env.NP_MINI === '1' ? 'mini' : 'full' });
     applySize();
     claude.scan();
@@ -746,6 +799,7 @@ app.whenReady().then(() => {
   spotify.start();
   setActive(false);
   applyHotkey();
+  applyMediaHotkeys();
   if (store.get('launchAtStartup') && app.isPackaged) setLoginItem(true);
   if (!process.argv.includes('--hidden')) win.once('ready-to-show', () => toggleWindow(true));
   else scheduleDiscard();

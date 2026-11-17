@@ -108,8 +108,15 @@
 
     <div class="sources" id="sources"></div>
 
-    <div class="lyrics" id="lyrics">
-      <div class="lyrics-inner" id="lyricsInner"></div>
+    <div class="lyrics-wrap">
+      <div class="lyrics" id="lyrics">
+        <div class="lyrics-inner" id="lyricsInner"></div>
+      </div>
+      <div class="ly-sync" id="lySync" hidden>
+        <button id="lyEarlier" title="Lyrics earlier ( [ )">−</button>
+        <button id="lyOff" title="Lyrics timing for this song — click to reset">0.0 s</button>
+        <button id="lyLater" title="Lyrics later ( ] )">+</button>
+      </div>
     </div>
     <div class="upnext" id="upNext" hidden></div>
   </section>
@@ -183,11 +190,6 @@
 
       <div class="group">
         <div class="group-title">Window</div>
-        <label class="field">
-          <span>Show / hide shortcut</span>
-          <input id="hotkey" spellcheck="false" placeholder="Click and press keys" readonly />
-        </label>
-        <div class="status-line warn" id="hotkeyWarn" hidden>That shortcut is taken by another app.</div>
         <label class="toggle"><input type="checkbox" id="pinned" /><span>Keep on screen when clicking elsewhere</span></label>
         <label class="toggle"><input type="checkbox" id="launchAtStartup" /><span>Start with Windows</span></label>
         <label class="toggle"><input type="checkbox" id="freeMemory" /><span>Free memory when hidden for a few minutes</span></label>
@@ -216,6 +218,22 @@
             <option value="24">24 hours</option><option value="72">3 days</option><option value="168">7 days</option>
           </select>
         </label>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Shortcuts <em class="hint">work anywhere in Windows</em></div>
+        <div class="hk-list" id="hkList"></div>
+        <div class="row"><button class="btn ghost small" id="hkSuggest">Use suggested shortcuts</button></div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Mini player</div>
+        <label class="field">
+          <span>Opacity <em id="miniOpVal">100%</em></span>
+          <input type="range" id="miniOpacity" min="30" max="100" step="5" value="100" />
+        </label>
+        <label class="toggle"><input type="checkbox" id="clickThrough" /><span>Click-through — clicks go to what's underneath</span></label>
+        <div class="status-line">With click-through on, hold <b>Ctrl</b> over the mini player to use it, or turn it off from the tray menu.</div>
       </div>
 
       <div class="group">

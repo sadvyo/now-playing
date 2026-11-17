@@ -24,6 +24,9 @@ A single-file **portable** `.exe` is also attached to each release. It starts sl
 - The pin keeps the window on screen; the picture-in-picture button switches to the mini player.
 - Keys: Space = play/pause, Ctrl+←/→ = previous/next, 1/2 = tabs, M = mini player, Esc = hide.
 - Volume: the speaker button next to the controls, or scroll over it (or over the mini player's cover).
+- Lyrics timing: hover the lyrics and use − / + (or the [ and ] keys) if they run early or late; it's remembered per song.
+- Global shortcuts (Settings → Shortcuts): play/pause, next, previous, volume, and mini-player click-through, from anywhere in Windows.
+- Mini player (Settings → Mini player): opacity, and click-through so clicks pass to what's underneath; hold Ctrl over it to use it.
 
 ## Connect Spotify (one-time)
 
