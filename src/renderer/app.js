@@ -179,7 +179,61 @@ function renderMedia() {
   renderLike();
   renderUpNext();
   updateMiniLyricVisibility();
+  renderVolume();
+  shell.style.setProperty('--np-accent', (t && t.accent) || '#1ed760');
 }
+
+// ---------- volume ----------
+let volLocalAt = 0, volSendTimer = null, volPending = null;
+function volIcon(v, muted) {
+  const silent = muted || v === 0;
+  $('volMuteX').hidden = !silent;
+  $('volWave1').style.display = silent ? 'none' : '';
+  $('volWave2').style.display = silent || v < 50 ? 'none' : '';
+}
+function showVol(v) {
+  const r = $('volRange');
+  r.value = String(v);
+  r.style.setProperty('--fill', v + '%');
+  $('volVal').textContent = String(v);
+}
+function renderVolume() {
+  const t = media.track;
+  const can = !!(t && typeof t.volume === 'number');
+  $('vol').classList.toggle('off', !can);
+  if (!can) { $('volPop').hidden = true; $('vol').classList.remove('open'); return; }
+  // Don't let a slightly old reading fight the slider while you're dragging it.
+  if (Date.now() - volLocalAt > 1500) { showVol(t.volume); volIcon(t.volume, t.muted); }
+  $('volBtn').title = `Volume ${t.volume}%${t.volumeVia === 'spotify' ? ' (Spotify device)' : ''} — scroll to change`;
+}
+function setVol(v) {
+  v = Math.max(0, Math.min(100, Math.round(v)));
+  volLocalAt = Date.now();
+  if (media.track) { media.track.volume = v; media.track.muted = false; }
+  showVol(v); volIcon(v, false);
+  // At most ~16 updates a second while dragging; the last value always goes out.
+  volPending = v;
+  if (!volSendTimer) volSendTimer = setTimeout(() => { volSendTimer = null; if (volPending != null) { np.setVolume(volPending); volPending = null; } }, 60);
+}
+$('volBtn').onclick = (e) => {
+  e.stopPropagation();
+  const open = $('volPop').hidden;
+  $('volPop').hidden = !open;
+  $('vol').classList.toggle('open', open);
+};
+$('volRange').addEventListener('input', (e) => setVol(Number(e.target.value)));
+for (const el of [$('volBtn'), $('volPop'), $('mmArt').parentElement]) {
+  el.addEventListener('wheel', (e) => {
+    const t = media.track;
+    if (!t || typeof t.volume !== 'number') return;
+    e.preventDefault();
+    setVol(t.volume + (e.deltaY < 0 ? 5 : -5));
+    if (el === $('mmArt').parentElement) el.title = `Volume ${media.track.volume}%`;
+  }, { passive: false });
+}
+document.addEventListener('click', (e) => {
+  if (!$('volPop').hidden && !$('vol').contains(e.target)) { $('volPop').hidden = true; $('vol').classList.remove('open'); }
+});
 
 // ---------- like ----------
 function renderLike() {
@@ -626,7 +680,10 @@ function renderUpdate() {
   $('updCheck').disabled = st.status === 'checking' || st.status === 'downloading';
   const b = $('updBanner');
   b.hidden = st.status !== 'ready';
-  if (st.status === 'ready') b.textContent = `Update v${st.latest} is ready — click to restart`;
+  if (st.status === 'ready') b.textContent = st.migrate
+    ? `Faster start: switch to the installed version — click to restart`
+    : `Update v${st.latest} is ready — click to restart`;
+  if (st.status === 'ready' && st.migrate) el.textContent = 'Installed version ready — restart to switch (starts faster).';
 }
 $('updCheck').onclick = async () => { upd = (await np.updateCheck()) || upd; renderUpdate(); };
 $('updApply').onclick = () => np.updateApply();

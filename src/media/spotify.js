@@ -271,6 +271,8 @@ class Spotify extends EventEmitter {
           positionMs: p.progress_ms || 0,
           sampledAt: Date.now(),
           device: p.device?.name || null,
+          // Spotify Connect volume (phone, speaker…); used when the music isn't on this PC.
+          volume: p.device && p.device.supports_volume !== false && typeof p.device.volume_percent === 'number' ? p.device.volume_percent : null,
           canNext: true,
           canPrev: true,
           canSeek: true,
@@ -290,6 +292,14 @@ class Spotify extends EventEmitter {
       if (e.message !== 'Not connected') this.error = e.message;
     }
     this.emit('update', this.playback);
+  }
+
+  async setVolume(level) {
+    const v = Math.max(0, Math.min(100, Math.round(level)));
+    this._patch({ volume: v });
+    const r = await this.api('PUT', `/me/player/volume?volume_percent=${v}`);
+    if (r.status === 403) this.error = 'Changing volume needs Spotify Premium.';
+    return r.status >= 200 && r.status < 300;
   }
 
   async control(action, extra = {}) {

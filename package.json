@@ -1,12 +1,13 @@
 {
   "name": "nowplaying-popup",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "Pop-up widget: now playing (Spotify + any Windows player) with synced lyrics, and live Claude Code sessions",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "mock": "NP_MOCK=1 electron .",
-    "dist:win": "electron-builder --win --x64 --dir && node scripts/set-icon.mjs \"dist/win-unpacked/Now Playing.exe\" assets/icon.ico && electron-builder --win portable --x64 --prepackaged dist/win-unpacked"
+    "dist:win": "electron-builder --win --x64 --dir --publish never && node scripts/set-icon.mjs \"dist/win-unpacked/Now Playing.exe\" assets/icon.ico && electron-builder --win nsis portable --x64 --prepackaged dist/win-unpacked --publish never",
+    "build:helper": "dotnet publish helper/NowPlayingHelper.csproj -c Release -o helper/bin"
   },
   "keywords": [],
   "author": "sadvyo",
@@ -32,6 +33,12 @@
     "win": {
       "target": [
         {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "portable",
           "arch": [
             "x64"
@@ -45,14 +52,27 @@
       "artifactName": "NowPlaying-${version}-portable.exe"
     },
     "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
       "artifactName": "NowPlaying-Setup-${version}.exe",
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Now Playing",
       "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "helper/bin",
+        "to": "helper",
+        "filter": [
+          "NowPlayingHelper.exe"
+        ]
+      }
+    ]
   },
   "nowplaying": {
     "updateRepo": "sadvyo/now-playing"

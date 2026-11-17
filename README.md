@@ -12,12 +12,18 @@ A small always-on-top pop-up that lives in your system tray.
   - Chats: install the bundled Claude Desktop extension (Settings → Claude → Install), then paste the instruction into Claude's personal preferences. Claude reports progress through it; nothing is read from your account.
   - Claude Code sessions on this PC are picked up automatically, including questions and approval prompts.
 
+## Install
+
+Download **NowPlaying-Setup-x.y.z.exe** from the latest release and run it. It installs for your user only (no admin needed), adds a Start-menu and desktop shortcut, and starts the app. Updates install themselves.
+
+A single-file **portable** `.exe` is also attached to each release. It starts slower because it unpacks itself each time, and it offers to switch to the installed version.
+
 ## Use
 
-- Run `NowPlaying-1.0.0-portable.exe`. Nothing gets installed, and it can take a few seconds to start because it unpacks itself first.
-- Click the tray icon or press **Ctrl + Shift + Space** to open or close it. Right-click the tray icon for the menu.
-- The pin button keeps the window on screen when you click elsewhere.
-- Keys: Space = play/pause, Ctrl+←/→ = previous/next, 1/2 = switch tabs, Esc = hide.
+- Click the tray icon or press **Ctrl + Shift + Space**; right-click the tray icon for the menu.
+- The pin keeps the window on screen; the picture-in-picture button switches to the mini player.
+- Keys: Space = play/pause, Ctrl+←/→ = previous/next, 1/2 = tabs, M = mini player, Esc = hide.
+- Volume: the speaker button next to the controls, or scroll over it (or over the mini player's cover).
 
 ## Connect Spotify (one-time)
 
@@ -36,16 +42,21 @@ Spotify's Development Mode requires the app owner to have **Premium**. Controlli
 
 ```
 npm install
-npm start            # run in dev
-npm run dist:win     # -> dist/NowPlaying-1.0.0-portable.exe
+npm run build:helper   # native helper (needs the .NET 8 SDK on Windows)
+npm start              # run in dev
+npm run dist:win       # -> dist/NowPlaying-Setup-x.y.z.exe and the portable .exe
 ```
+
+Releases are built by GitHub Actions: bump `version` in package.json on `main` and the Release workflow publishes it.
 
 To build an installer instead, change `build.win.target` to `nsis` (building it on Linux needs Wine).
 
 ## Files
 
 - `src/main.js`: tray, window, hotkey, picks which source to show
-- `src/media/smtc.ps1` + `smtc.js`: Windows media sessions via PowerShell/WinRT (no native modules)
+- `helper/`: native helper (C#, Native AOT) for Windows media sessions, thumbnails and per-app volume
+- `src/media/smtc.js`: talks to the helper, falls back to `smtc.ps1` (PowerShell) if the helper can't run
+- `src/media/accent.js`: picks the accent color from the cover art
 - `src/media/spotify.js`: Spotify OAuth (PKCE) and the player API
 - `src/media/lyrics.js`: LRCLIB lyrics lookup and LRC parsing
 - `src/claude/sessions.js`: Claude Code session reader

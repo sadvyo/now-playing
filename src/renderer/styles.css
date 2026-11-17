@@ -370,3 +370,28 @@ select option { background: #1b1c22; }
   font-size: 12px; font-weight: 600; color: #07170d; background: var(--spotify); -webkit-app-region: no-drag; }
 .upd-banner:hover { filter: brightness(1.08); }
 .shell[data-mode="mini"] .upd-banner { display: none; }
+
+/* ---------- v1.7: colors from the cover ---------- */
+@property --np-accent { syntax: '<color>'; inherits: true; initial-value: #1ed760; }
+.shell { --np-accent: #1ed760; transition: --np-accent .7s ease; }
+.bar .fill, .bar:hover .fill { background: var(--np-accent); }
+.bar .knob { background: var(--np-accent); }
+.ctl.play { background: var(--np-accent); color: #111; }
+.ctl.play:hover { background: var(--np-accent); filter: brightness(1.08); }
+.mini-bar .fill, .mm-bar .fill { background: var(--np-accent); }
+.ctl.like.on, .mm-like.on { color: var(--np-accent); }
+.chip.active { border-color: color-mix(in srgb, var(--np-accent) 55%, transparent); }
+.mm-ctl .ctl.play { background: var(--np-accent); color: #111; }
+
+/* ---------- volume ---------- */
+.vol { position: relative; width: 38px; height: 38px; flex: none; }
+.vol.off { visibility: hidden; }
+.vol-btn { color: var(--muted); }
+.vol-btn:hover, .vol.open .vol-btn { color: var(--text); }
+.vol-btn svg path:not(.fillsvg) { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.vol-pop { position: absolute; right: -6px; bottom: 44px; z-index: 6; display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: 12px; background: #1d1f26; border: 1px solid rgba(255,255,255,.1); box-shadow: 0 10px 26px rgba(0,0,0,.5); }
+.vol-val { width: 24px; text-align: right; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#volRange { -webkit-appearance: none; appearance: none; width: 130px; height: 4px; padding: 0; border: 0; border-radius: 4px; cursor: pointer;
+  background: linear-gradient(90deg, var(--np-accent) var(--fill, 50%), rgba(255,255,255,.15) var(--fill, 50%)); }
+#volRange::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); }

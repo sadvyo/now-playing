@@ -1,0 +1,64 @@
+name: Package test
+
+# Same build as the Release workflow, for test branches (nothing is published). Release: publishes a release whenever the "version" in package.json on main is new:
+# builds the native helper and the Windows installer + portable .exe, smoke-tests
+# the packaged app, then creates the tag + GitHub release. The app's
+# auto-updater picks up the newest release.
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build native helper
+        run: dotnet publish helper/NowPlayingHelper.csproj -c Release -o helper/bin
+
+      - name: Helper self-test
+        shell: pwsh
+        run: |
+          & helper/bin/NowPlayingHelper.exe --selftest
+          if ($LASTEXITCODE -ne 0) { throw "helper selftest failed" }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build installer + portable .exe
+        run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Check the package contains the helper
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'dist/win-unpacked/resources/helper/NowPlayingHelper.exe')) { throw 'helper missing from package' }
+          Get-ChildItem dist/*.exe | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Smoke test the packaged app
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath 'dist/win-unpacked/Now Playing.exe' -ArgumentList '--hidden' -PassThru
+          Start-Sleep -Seconds 20
+          $procs = Get-Process | Where-Object { $_.ProcessName -in 'Now Playing','NowPlayingHelper' }
+          $procs | Select-Object ProcessName, Id, @{n='MB';e={[math]::Round($_.WorkingSet64/1MB,1)}} | Format-Table | Out-String | Write-Host
+          $log = Join-Path $env:APPDATA 'Now Playing\debug.log'
+          if (Test-Path $log) { Get-Content $log | Write-Host } else { Write-Host 'no debug.log' }
+          Stop-Process -Name 'Now Playing' -Force -ErrorAction SilentlyContinue
+          Stop-Process -Name 'NowPlayingHelper' -Force -ErrorAction SilentlyContinue
+
