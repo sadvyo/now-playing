@@ -70,6 +70,8 @@ document.addEventListener('keydown', (e) => {
   if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return;
   if (e.key === 'Escape') { if (!$('settings').hidden) openSettings(false); else if (shell.dataset.mode !== 'mini') np.hide(); }
   if (e.key === 'm' || e.key === 'M') setMode(shell.dataset.mode === 'mini' ? 'full' : 'mini');
+  if (e.key === '[') setLyricsOffset(lyricsOffset() - 250);
+  if (e.key === ']') setLyricsOffset(lyricsOffset() + 250);
   if (e.key === ' ') { e.preventDefault(); np.control('toggle'); }
   if (e.key === 'ArrowRight' && e.ctrlKey) np.control('next');
   if (e.key === 'ArrowLeft' && e.ctrlKey) np.control('previous');
@@ -394,6 +396,36 @@ function renderLyrics() {
 }
 $('lyrics').addEventListener('wheel', () => { userScrolledAt = Date.now(); }, { passive: true });
 
+// ---------- lyrics timing nudge (remembered per song) ----------
+function lyricsOffset() { return (settings.lyricsOffsets || {})[lyrics.key] || 0; }
+let offSaveTimer = null;
+function setLyricsOffset(ms) {
+  if (!lyrics.key) return;
+  ms = Math.max(-10000, Math.min(10000, Math.round(ms / 50) * 50));
+  const map = { ...(settings.lyricsOffsets || {}) };
+  delete map[lyrics.key];          // re-insert so it counts as most recently used
+  if (ms) map[lyrics.key] = ms;
+  const keys = Object.keys(map);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 300))) delete map[k]; // keep the last 300 songs
+  settings.lyricsOffsets = map;
+  renderSyncUI();
+  lyricIdx = -1; needsTick = true; tick();
+  clearTimeout(offSaveTimer);
+  offSaveTimer = setTimeout(() => { offSaveTimer = null; np.setSettings({ lyricsOffsets: settings.lyricsOffsets }); }, 500);
+}
+function renderSyncUI() {
+  const box = $('lySync');
+  const on = lyrics.status === 'found' && lyrics.synced.length > 0;
+  box.hidden = !on;
+  if (!on) return;
+  const off = lyricsOffset();
+  $('lyOff').textContent = (off > 0 ? '+' : off < 0 ? '−' : '') + (Math.abs(off) / 1000).toFixed(off % 1000 === 0 ? 1 : 2) + ' s';
+  box.classList.toggle('shifted', off !== 0);
+}
+$('lyEarlier').onclick = () => setLyricsOffset(lyricsOffset() - 250);
+$('lyLater').onclick = () => setLyricsOffset(lyricsOffset() + 250);
+$('lyOff').onclick = () => setLyricsOffset(0);
+
 function tickLyrics(pos) {
   if (lyrics.status !== 'found' || !lyrics.synced.length) return;
   const mini = shell.dataset.mode === 'mini';
@@ -402,7 +434,8 @@ function tickLyrics(pos) {
   let i = -1;
   // binary search for last line with t <= pos
   let lo = 0, hi = L.length - 1;
-  while (lo <= hi) { const m = (lo + hi) >> 1; if (L[m].t <= pos + 150) { i = m; lo = m + 1; } else hi = m - 1; }
+  const at = pos - lyricsOffset() + 150; // positive offset = lyrics later
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (L[m].t <= at) { i = m; lo = m + 1; } else hi = m - 1; }
   if (i === lyricIdx) return;
   lyricIdx = i;
   if (mini) { setMiniLyric(i >= 0 ? L[i].text : ''); return; }
@@ -588,7 +621,11 @@ function fillSettings() {
   $('spRedirect').value = media.spotify?.redirectUri || `http://127.0.0.1:${settings.spotifyPort || 8888}/callback`;
   $('source').value = settings.source || 'auto';
   $('lyricsForAll').checked = !!settings.lyricsForAll;
-  $('hotkey').value = prettyHotkey(settings.hotkey);
+  np.hotkeyStatus().then((st) => { hkStatus = { ...(st || {}), hotkey: settings.hotkeyOk }; renderShortcuts(); });
+  renderShortcuts();
+  $('miniOpacity').value = String(Math.round((settings.miniOpacity || 1) * 100));
+  $('miniOpVal').textContent = $('miniOpacity').value + '%';
+  $('clickThrough').checked = !!settings.clickThrough;
   $('pinned').checked = !!settings.pinned;
   $('launchAtStartup').checked = !!settings.launchAtStartup;
   $('claudeDir').value = settings.claudeDir || '';
@@ -702,34 +739,119 @@ function renderBridgeStatus() {
   else el.textContent = 'Not connected yet — upload the plugin in Claude, then start a task.';
 }
 
-// hotkey recorder
-function prettyHotkey(h) { return (h || '').replace('CommandOrControl', 'Ctrl').replace(/\+/g, ' + '); }
-const hk = $('hotkey');
-hk.addEventListener('focus', () => { hk.classList.add('rec'); hk.value = 'Press keys…'; });
-hk.addEventListener('blur', () => { hk.classList.remove('rec'); hk.value = prettyHotkey(settings.hotkey); });
-hk.addEventListener('keydown', async (e) => {
-  e.preventDefault();
-  if (e.key === 'Escape') { hk.blur(); return; }
-  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+// ---------- shortcuts ----------
+const SHORTCUTS = [
+  ['hotkey', 'Show / hide pop-up'],
+  ['playPause', 'Play / pause'],
+  ['next', 'Next song'],
+  ['previous', 'Previous song'],
+  ['volUp', 'Volume up'],
+  ['volDown', 'Volume down'],
+  ['clickThrough', 'Mini player click-through'],
+];
+const SUGGESTED = {
+  playPause: 'CommandOrControl+Alt+Space',
+  next: 'CommandOrControl+Alt+PageDown',
+  previous: 'CommandOrControl+Alt+PageUp',
+  volUp: 'CommandOrControl+Alt+=',   // not Ctrl+Alt+arrows: some laptops rotate the screen with those
+  volDown: 'CommandOrControl+Alt+-',
+};
+let hkStatus = {};
+function prettyHotkey(h) {
+  return (h || '').replace('CommandOrControl', 'Ctrl').replace('Super', 'Win').replace(/\+/g, ' + ')
+    .replace('PageDown', 'Page Down').replace('PageUp', 'Page Up');
+}
+function currentAccel(name) { return name === 'hotkey' ? settings.hotkey : (settings.mediaHotkeys || {})[name]; }
+async function saveAccel(name, accel) {
+  const patch = name === 'hotkey' ? { hotkey: accel } : { mediaHotkeys: { ...(settings.mediaHotkeys || {}), [name]: accel } };
+  const r = await np.setSettings(patch);
+  settings = { ...settings, ...r };
+  hkStatus = { ...(r.hotkeyStatus || {}), hotkey: r.hotkeyOk };
+  renderShortcuts();
+}
+// Turn a key press into an Electron accelerator ("CommandOrControl+Alt+Space").
+function accelFromEvent(e) {
+  if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(e.key)) return null;
   const mods = [];
   if (e.ctrlKey) mods.push('CommandOrControl');
   if (e.altKey) mods.push('Alt');
   if (e.shiftKey) mods.push('Shift');
   if (e.metaKey) mods.push('Super');
-  if (!mods.length) return;
-  let key = e.code.startsWith('Key') ? e.code.slice(3) : e.code.startsWith('Digit') ? e.code.slice(5) : e.key;
-  if (key === ' ') key = 'Space';
-  if (key.length === 1) key = key.toUpperCase();
-  const accel = [...mods, key].join('+');
-  const r = await np.setSettings({ hotkey: accel });
-  $('hotkeyWarn').hidden = r.hotkeyOk !== false;
-  hk.blur();
+  const c = e.code;
+  const map = { Space: 'Space', ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', PageUp: 'PageUp', PageDown: 'PageDown',
+    Home: 'Home', End: 'End', Insert: 'Insert', Delete: 'Delete', Equal: '=', Minus: '-', Comma: ',', Period: '.', Slash: '/', Backslash: '\\',
+    BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Backquote: '`', NumpadAdd: 'numadd', NumpadSubtract: 'numsub',
+    MediaPlayPause: 'MediaPlayPause', MediaTrackNext: 'MediaNextTrack', MediaTrackPrevious: 'MediaPreviousTrack' };
+  let key = /^Key[A-Z]$/.test(c) ? c.slice(3) : /^Digit\d$/.test(c) ? c.slice(5) : /^Numpad\d$/.test(c) ? 'num' + c.slice(6) : /^F\d{1,2}$/.test(c) ? c : map[c];
+  if (!key) return null;
+  // Global shortcuts need a modifier, except F-keys and media keys.
+  if (!mods.length && !/^F\d{1,2}$|^Media/.test(key)) return null;
+  return [...mods, key].join('+');
+}
+function renderShortcuts() {
+  const box = $('hkList');
+  box.innerHTML = SHORTCUTS.map(([name, label]) => {
+    const accel = currentAccel(name);
+    const bad = accel && hkStatus[name] === false;
+    return `<div class="hk-row" data-name="${name}"><span>${esc(label)}</span>
+      <input readonly class="${bad ? 'bad' : ''}" value="${esc(accel ? prettyHotkey(accel) : 'Not set')}" />
+      <button class="x" title="Remove" ${accel ? '' : 'hidden'}>×</button>
+      ${bad ? '<span class="taken">Taken by another app or shortcut — pick another.</span>' : ''}</div>`;
+  }).join('');
+  box.querySelectorAll('.hk-row').forEach((row) => {
+    const name = row.dataset.name;
+    const input = row.querySelector('input');
+    input.onfocus = () => { input.classList.add('rec'); input.value = 'Press keys… (Esc to cancel)'; };
+    input.onblur = () => { input.classList.remove('rec'); const a = currentAccel(name); input.value = a ? prettyHotkey(a) : 'Not set'; };
+    input.onkeydown = (e) => {
+      e.preventDefault();
+      if (e.key === 'Escape') { input.blur(); return; }
+      const accel = accelFromEvent(e);
+      if (!accel) return;
+      input.blur();
+      saveAccel(name, accel);
+    };
+    row.querySelector('.x').onclick = () => saveAccel(name, '');
+  });
+}
+$('hkSuggest').onclick = async () => {
+  const cur = settings.mediaHotkeys || {};
+  const next = { ...cur };
+  for (const [k, v] of Object.entries(SUGGESTED)) if (!next[k]) next[k] = v;
+  const r = await np.setSettings({ mediaHotkeys: next });
+  settings = { ...settings, ...r };
+  hkStatus = { ...(r.hotkeyStatus || {}), hotkey: r.hotkeyOk };
+  renderShortcuts();
+};
+
+// ---------- mini player options ----------
+let opTimer = null;
+$('miniOpacity').addEventListener('input', (e) => {
+  const v = Number(e.target.value);
+  $('miniOpVal').textContent = v + '%';
+  clearTimeout(opTimer);
+  settings.miniOpacity = v / 100; applyMiniLook(); // instant preview
+  opTimer = setTimeout(() => np.setSettings({ miniOpacity: v / 100 }), 150);
 });
+$('clickThrough').onchange = (e) => np.setSettings({ clickThrough: e.target.checked });
+// Click-through: holding Ctrl while the mouse is over the mini player makes it clickable.
+let interactive = false;
+document.addEventListener('mousemove', (e) => {
+  if (shell.dataset.mode !== 'mini' || !settings.clickThrough) return;
+  if (e.ctrlKey !== interactive) { interactive = e.ctrlKey; np.setInteractive(interactive); shell.classList.toggle('ct-live', interactive); }
+});
+document.addEventListener('mouseleave', () => { if (interactive) { interactive = false; np.setInteractive(false); shell.classList.remove('ct-live'); } });
 
 // ---------- wiring ----------
 let lastKey = null;
+function applyMiniLook() {
+  shell.style.setProperty('--mini-op', String(Math.max(0.3, Math.min(1, Number(settings.miniOpacity) || 1))));
+  shell.classList.toggle('click-through', !!settings.clickThrough);
+}
 np.onSettings((s) => {
+  if (offSaveTimer) s.lyricsOffsets = settings.lyricsOffsets; // a timing change is about to be saved
   settings = s;
+  applyMiniLook();
   if (s.mode && shell.dataset.mode !== s.mode) shell.dataset.mode = s.mode;
   $('sizeBtn').classList.toggle('on', !!s.large);
   $('icoGrow').hidden = !!s.large; $('icoShrink').hidden = !s.large;
@@ -745,7 +867,7 @@ np.onMedia((m) => {
   if (m.key !== lastKey) { lastKey = m.key; renderLyrics(); }
   if (!$('settings').hidden) { renderSpotifyStatus(); renderDiag(); }
 });
-np.onLyrics((l) => { lyrics = l; renderLyrics(); lyricIdx = -1; lastMiniLyric = null; updateMiniLyricVisibility(); needsTick = true; });
+np.onLyrics((l) => { lyrics = l; renderLyrics(); renderSyncUI(); lyricIdx = -1; lastMiniLyric = null; updateMiniLyricVisibility(); needsTick = true; });
 np.onClaude((c) => { claude = c; renderClaude(); });
 np.onDesktop((d) => { desk = d; renderClaude(); if (!$('settings').hidden) renderBridgeStatus(); });
 np.onChats((c) => { chats = c; renderClaude(); if (!$('settings').hidden) renderBridgeStatus(); });
@@ -756,6 +878,7 @@ np.onSpotifyStatus((s) => { media.spotify = s; if (!$('settings').hidden) fillSe
 (async () => {
   settings = await np.getSettings();
   shell.dataset.mode = settings.mode || 'full';
+  applyMiniLook();
   $('sizeBtn').classList.toggle('on', !!settings.large);
   $('icoGrow').hidden = !!settings.large; $('icoShrink').hidden = !settings.large;
   setTab(settings.tab || 'playing');
