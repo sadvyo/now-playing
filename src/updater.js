@@ -54,7 +54,7 @@ class Updater extends EventEmitter {
     this.timer = setInterval(() => this.check(false), CHECK_EVERY);
   }
 
-  stop() { clearInterval(this.timer); }
+  stop() { clearInterval(this.timer); clearTimeout(this.retryTimer); }
 
   async check(manual) {
     const repo = this.repo();
@@ -63,12 +63,7 @@ class Updater extends EventEmitter {
     this.busy = true;
     this._set({ status: 'checking', error: null });
     try {
-      const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-        headers: { 'User-Agent': UA, Accept: 'application/vnd.github+json' },
-      });
-      if (res.status === 404) throw new Error('No releases published yet.');
-      if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-      const rel = await res.json();
+      const rel = await this._fetchRelease(repo);
       const version = String(rel.tag_name || '').replace(/^v/, '');
       const assets = rel.assets || [];
       const setup = assets.find((a) => SETUP.test(a.name));
@@ -92,6 +87,45 @@ class Updater extends EventEmitter {
       this.busy = false;
     }
     return this.state;
+  }
+
+  // Newest release info. First latest.json through GitHub's normal file downloads
+  // (not rate-limited); the GitHub API only as a fallback for older releases.
+  async _fetchRelease(repo) {
+    try {
+      const r = await fetch(`https://github.com/${repo}/releases/latest/download/latest.json`, { headers: { 'User-Agent': UA }, cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.version && Array.isArray(j.files)) {
+          return {
+            tag_name: 'v' + j.version,
+            body: j.notes || '',
+            assets: j.files.map((f) => ({
+              name: f.name,
+              size: f.size,
+              digest: f.sha256 ? 'sha256:' + f.sha256 : '',
+              browser_download_url: `https://github.com/${repo}/releases/download/v${j.version}/${encodeURIComponent(f.name)}`,
+            })),
+          };
+        }
+      }
+    } catch { /* fall back to the API */ }
+
+    const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+      headers: { 'User-Agent': UA, Accept: 'application/vnd.github+json' },
+    });
+    if (res.status === 404) throw new Error('No releases published yet.');
+    if (res.status === 403 || res.status === 429) {
+      // Rate limit: retry by itself when GitHub says the limit resets.
+      const reset = Number(res.headers.get('x-ratelimit-reset')) * 1000;
+      const at = reset > Date.now() ? reset + 5000 : Date.now() + 3600 * 1000;
+      clearTimeout(this.retryTimer);
+      this.retryTimer = setTimeout(() => this.check(false), at - Date.now());
+      const hhmm = new Date(at).toTimeString().slice(0, 5);
+      throw new Error(`GitHub is limiting update checks from your network right now — trying again at ${hhmm}.`);
+    }
+    if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+    return res.json();
   }
 
   async download() {
