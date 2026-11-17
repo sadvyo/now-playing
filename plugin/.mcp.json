@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "now-playing": {
+      "command": "powershell.exe",
+      "args": ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "${CLAUDE_PLUGIN_ROOT}/server/bridge.ps1"],
+      "env": { "NOWPLAYING_PORT": "47823" }
+    }
+  }
+}

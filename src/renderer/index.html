@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+<title>Now Playing</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="shell" id="shell">
+  <div class="backdrop"><canvas id="bgArt" width="16" height="16"></canvas></div>
+
+  <header class="top">
+    <div class="tabs" role="tablist">
+      <button class="tab" data-tab="playing" role="tab">
+        <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>
+        Playing
+      </button>
+      <button class="tab" data-tab="claude" role="tab">
+        <svg viewBox="0 0 24 24" class="spark"><path d="M12 2v6M12 16v6M2 12h6M16 12h6M4.9 4.9l4.2 4.2M14.9 14.9l4.2 4.2M4.9 19.1l4.2-4.2M14.9 9.1l4.2-4.2" /></svg>
+        Claude <span class="badge" id="claudeBadge" hidden>0</span>
+      </button>
+    </div>
+    <div class="win-actions">
+      <button class="icon-btn" id="miniBtn" title="Mini player">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><rect x="11" y="12" width="8" height="6" rx="1" class="fillsvg" /></svg>
+      </button>
+      <button class="icon-btn" id="sizeBtn" title="Bigger / smaller window">
+        <svg viewBox="0 0 24 24" id="icoGrow"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
+        <svg viewBox="0 0 24 24" id="icoShrink" hidden><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg>
+      </button>
+      <button class="icon-btn" id="pinBtn" title="Keep on screen">
+        <svg viewBox="0 0 24 24"><path d="M12 17v5M9 3h6l-1 6 4 4H6l4-4z" /></svg>
+      </button>
+      <button class="icon-btn" id="settingsBtn" title="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+      </button>
+      <button class="icon-btn" id="closeBtn" title="Hide (Ctrl+Shift+Space)">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
+    </div>
+  </header>
+
+  <button class="upd-banner" id="updBanner" hidden></button>
+
+  <!-- ============ MINI PLAYER ============ -->
+  <section class="mini-mode" id="miniMode">
+    <div class="mm-art"><img id="mmArt" alt="" /><div class="art-ph">♪</div></div>
+    <div class="mm-meta">
+      <div class="mm-title" id="mmTitle">Nothing playing</div>
+      <div class="mm-artist" id="mmArtist"></div>
+      <div class="mm-src" id="mmSrc"></div>
+      <div class="mm-lyric" id="mmLyric" hidden><span id="mmLyricText"></span></div>
+    </div>
+    <div class="mm-ctl">
+      <button class="ctl small" id="mmPrev" title="Previous"><svg viewBox="0 0 24 24"><path d="M6 5v14M19 5L9 12l10 7z" class="fillsvg" /></svg></button>
+      <button class="ctl small play" id="mmPlay" title="Play / pause">
+        <svg viewBox="0 0 24 24" id="mmIcoPlay"><path d="M8 5l11 7-11 7z" class="fillsvg" /></svg>
+        <svg viewBox="0 0 24 24" id="mmIcoPause" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" class="fillsvg" /></svg>
+      </button>
+      <button class="ctl small" id="mmNext" title="Next"><svg viewBox="0 0 24 24"><path d="M18 5v14M5 5l10 7-10 7z" class="fillsvg" /></svg></button>
+    </div>
+    <div class="mm-side">
+      <button class="icon-btn sm mm-like" id="mmLike" title="Like" hidden><svg viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.6 1.1 5 2.9 1.4-1.8 3-2.9 5-2.9 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z" /></svg></button>
+      <button class="icon-btn sm" id="mmExpand" title="Full view"><svg viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg></button>
+      <button class="mm-claude" id="mmClaude" title="Claude">
+        <svg viewBox="0 0 24 24" class="spark"><path d="M12 2v6M12 16v6M2 12h6M16 12h6M4.9 4.9l4.2 4.2M14.9 14.9l4.2 4.2M4.9 19.1l4.2-4.2M14.9 9.1l4.2-4.2" /></svg><span id="mmClaudeN"></span>
+      </button>
+    </div>
+    <div class="mm-bar"><div class="fill" id="mmFill"></div></div>
+  </section>
+
+  <!-- ============ PLAYING ============ -->
+  <section class="view" id="view-playing">
+    <div class="np" id="np">
+      <div class="art" id="artBox"><img id="art" alt="" /><div class="art-ph">♪</div></div>
+      <div class="meta">
+        <div class="src" id="srcChip"><span class="dot"></span><span id="srcName">—</span></div>
+        <div class="title" id="title">Nothing playing</div>
+        <div class="artist" id="artist">Play something in Spotify, a browser or any player</div>
+      </div>
+    </div>
+
+    <div class="progress" id="progress">
+      <span class="time" id="tPos">0:00</span>
+      <div class="bar" id="bar"><div class="fill" id="fill"></div><div class="knob" id="knob"></div></div>
+      <span class="time" id="tDur">0:00</span>
+    </div>
+
+    <div class="controls">
+      <button class="ctl like" id="likeBtn" title="Like"><svg viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.9 3.6 4.5 7 4.5c2 0 3.6 1.1 5 2.9 1.4-1.8 3-2.9 5-2.9 3.4 0 5.6 3.4 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z" /></svg></button>
+      <button class="ctl" id="prevBtn" title="Previous"><svg viewBox="0 0 24 24"><path d="M6 5v14M19 5L9 12l10 7z" class="fillsvg" /></svg></button>
+      <button class="ctl play" id="playBtn" title="Play / pause">
+        <svg viewBox="0 0 24 24" id="icoPlay"><path d="M8 5l11 7-11 7z" class="fillsvg" /></svg>
+        <svg viewBox="0 0 24 24" id="icoPause" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" class="fillsvg" /></svg>
+      </button>
+      <button class="ctl" id="nextBtn" title="Next"><svg viewBox="0 0 24 24"><path d="M18 5v14M5 5l10 7-10 7z" class="fillsvg" /></svg></button>
+      <span class="ctl-spacer"></span>
+    </div>
+
+    <div class="sources" id="sources"></div>
+
+    <div class="lyrics" id="lyrics">
+      <div class="lyrics-inner" id="lyricsInner"></div>
+    </div>
+    <div class="upnext" id="upNext" hidden></div>
+  </section>
+
+  <!-- ============ CLAUDE ============ -->
+  <section class="view" id="view-claude">
+    <div class="claude-head">
+      <div>
+        <div class="h">Claude</div>
+        <div class="sub" id="claudeSub">Waiting for updates…</div>
+      </div>
+      <button class="btn ghost small" id="clearDone" hidden>Clear finished</button>
+    </div>
+    <div class="claude-list" id="claudeList"></div>
+    <div class="mini" id="mini">
+      <div class="mini-art"><img id="miniArt" alt="" /></div>
+      <div class="mini-meta"><div class="mini-title" id="miniTitle">Nothing playing</div><div class="mini-artist" id="miniArtist"></div></div>
+      <button class="ctl small" id="miniPlay" title="Play / pause">
+        <svg viewBox="0 0 24 24" id="miniIcoPlay"><path d="M8 5l11 7-11 7z" class="fillsvg" /></svg>
+        <svg viewBox="0 0 24 24" id="miniIcoPause" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" class="fillsvg" /></svg>
+      </button>
+      <div class="mini-bar"><div class="fill" id="miniFill"></div></div>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section class="settings" id="settings" hidden>
+    <div class="settings-head">
+      <button class="icon-btn" id="settingsBack" title="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6" /></svg></button>
+      <div class="h">Settings</div>
+    </div>
+    <div class="settings-body">
+      <div class="group">
+        <div class="group-title"><span class="dot spot"></span>Spotify</div>
+        <div class="status-line" id="spStatus">Not connected</div>
+        <label class="field">
+          <span>Client ID</span>
+          <input id="spClientId" spellcheck="false" placeholder="Paste from developer.spotify.com" />
+        </label>
+        <label class="field">
+          <span>Redirect URI <em>(add this exact value to your Spotify app)</em></span>
+          <div class="copyrow"><input id="spRedirect" readonly /><button class="btn ghost" id="copyRedirect">Copy</button></div>
+        </label>
+        <div class="row">
+          <button class="btn primary" id="spConnect">Connect Spotify</button>
+          <button class="btn ghost" id="spDisconnect" hidden>Disconnect</button>
+          <button class="btn link" id="spHelp">How to get a Client ID</button>
+        </div>
+        <ol class="help" id="spHelpText" hidden>
+          <li>Open <a href="#" data-url="https://developer.spotify.com/dashboard">developer.spotify.com/dashboard</a> and log in.</li>
+          <li><b>Create app</b> → any name, tick <b>Web API</b>.</li>
+          <li>Under <b>Redirect URIs</b> add the value above (it must be <code>127.0.0.1</code>, not <code>localhost</code>).</li>
+          <li>Copy the <b>Client ID</b> here and press Connect. No secret needed.</li>
+          <li>Spotify's Development Mode requires the app owner to have Premium.</li>
+        </ol>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Playback</div>
+        <label class="field">
+          <span>Show music from</span>
+          <select id="source">
+            <option value="auto">Automatic — whatever is playing</option>
+            <option value="spotify">Spotify account only</option>
+            <option value="system">Windows media players only</option>
+          </select>
+        </label>
+        <label class="toggle"><input type="checkbox" id="lyricsForAll" /><span>Try lyrics for every player (YouTube, etc.)</span></label>
+        <div class="status-line" id="mediaDiag"></div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Window</div>
+        <label class="field">
+          <span>Show / hide shortcut</span>
+          <input id="hotkey" spellcheck="false" placeholder="Click and press keys" readonly />
+        </label>
+        <div class="status-line warn" id="hotkeyWarn" hidden>That shortcut is taken by another app.</div>
+        <label class="toggle"><input type="checkbox" id="pinned" /><span>Keep on screen when clicking elsewhere</span></label>
+        <label class="toggle"><input type="checkbox" id="launchAtStartup" /><span>Start with Windows</span></label>
+        <label class="toggle"><input type="checkbox" id="freeMemory" /><span>Free memory when hidden for a few minutes</span></label>
+      </div>
+
+      <div class="group">
+        <div class="group-title"><span class="dot clau"></span>Claude</div>
+        <div class="status-line" id="bridgeStatus">Plugin not connected yet</div>
+        <div class="row">
+          <button class="btn primary clau" id="installBridge">Get Claude plugin</button>
+          <button class="btn ghost" id="copyInstr">Copy instruction</button>
+        </div>
+        <div id="bridgeTest"></div>
+        <label class="toggle"><input type="checkbox" id="notifyQuestions" /><span>Windows notification when Claude asks something</span></label>
+        <label class="toggle"><input type="checkbox" id="popupOnQuestion" /><span>Also pop this window open</span></label>
+        <label class="toggle"><input type="checkbox" id="notifyDone" /><span>Quiet notification when a task finishes</span></label>
+        <button class="btn link" id="testAlert" style="align-self:flex-start">Send a test alert</button>
+        <label class="field">
+          <span>Claude Code folder <em>(leave empty for default)</em></span>
+          <input id="claudeDir" spellcheck="false" placeholder="C:\Users\you\.claude" />
+        </label>
+        <label class="field">
+          <span>Show Claude Code sessions active in the last</span>
+          <select id="claudeLookbackHours">
+            <option value="1">1 hour</option><option value="6">6 hours</option><option value="12">12 hours</option>
+            <option value="24">24 hours</option><option value="72">3 days</option><option value="168">7 days</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Updates</div>
+        <div class="status-line" id="updStatus">—</div>
+        <div class="row">
+          <button class="btn ghost" id="updCheck">Check for updates</button>
+          <button class="btn primary" id="updApply" hidden>Restart to update</button>
+        </div>
+        <label class="toggle"><input type="checkbox" id="autoDownload" /><span>Download updates automatically</span></label>
+      </div>
+
+      <div class="row end"><button class="btn link" id="logBtn">Open debug log</button><button class="btn danger" id="quitBtn">Quit app</button></div>
+    </div>
+  </section>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "now-playing-claude",
+  "version": "1.0.1",
+  "description": "Reports task progress and ask-for-input alerts to the Now Playing desktop pop-up.",
+  "author": { "name": "sadvyo" },
+  "license": "MIT",
+  "keywords": ["progress", "notifications", "desktop"]
+}

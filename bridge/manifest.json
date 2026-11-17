@@ -1,0 +1,35 @@
+{
+  "manifest_version": "0.3",
+  "name": "now-playing-claude-bridge",
+  "display_name": "Now Playing – Claude progress",
+  "version": "1.0.0",
+  "description": "Lets Claude report task progress and ask-for-input alerts to the Now Playing pop-up on your desktop.",
+  "long_description": "Adds three small tools. Claude calls them to update a progress bar for the task it is working on, to send you a desktop notification when it needs your answer, and to mark the task finished. Everything stays on your PC: the tools only talk to the Now Playing app on 127.0.0.1.",
+  "author": { "name": "sadvyo" },
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": { "NOWPLAYING_PORT": "${user_config.port}" }
+    }
+  },
+  "tools": [
+    { "name": "progress_update", "description": "Update the progress bar for the task you are working on." },
+    { "name": "ask_user_alert", "description": "Notify the user that you need their answer or a decision." },
+    { "name": "task_finished", "description": "Mark the task as finished." }
+  ],
+  "user_config": {
+    "port": {
+      "type": "number",
+      "title": "Now Playing port",
+      "description": "Local port of the Now Playing app (leave as 47823 unless you changed it there).",
+      "default": 47823,
+      "required": false
+    }
+  },
+  "compatibility": { "platforms": ["win32", "darwin", "linux"] },
+  "license": "MIT"
+}

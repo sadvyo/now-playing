@@ -1,0 +1,64 @@
+{
+  "name": "nowplaying-popup",
+  "version": "1.6.1",
+  "description": "Pop-up widget: now playing (Spotify + any Windows player) with synced lyrics, and live Claude Code sessions",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "mock": "NP_MOCK=1 electron .",
+    "dist:win": "electron-builder --win --x64 --dir && node scripts/set-icon.mjs \"dist/win-unpacked/Now Playing.exe\" assets/icon.ico && electron-builder --win portable --x64 --prepackaged dist/win-unpacked"
+  },
+  "keywords": [],
+  "author": "sadvyo",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^38.8.6",
+    "electron-builder": "^26.18.0",
+    "pe-library": "^1.0.1",
+    "resedit": "^2.0.3"
+  },
+  "productName": "Now Playing",
+  "build": {
+    "appId": "com.sadvyo.nowplaying",
+    "productName": "Now Playing",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "NowPlaying-${version}-portable.exe"
+    },
+    "nsis": {
+      "artifactName": "NowPlaying-Setup-${version}.exe",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
+  },
+  "nowplaying": {
+    "updateRepo": "sadvyo/now-playing"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sadvyo/now-playing"
+  }
+}
