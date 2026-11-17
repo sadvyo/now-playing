@@ -27,6 +27,7 @@ A single-file **portable** `.exe` is also attached to each release. It starts sl
 - Lyrics timing: hover the lyrics and use − / + (or the [ and ] keys) if they run early or late; it's remembered per song.
 - Global shortcuts (Settings → Shortcuts): play/pause, next, previous, volume, and mini-player click-through, from anywhere in Windows.
 - Mini player (Settings → Mini player): opacity, and click-through so clicks pass to what's underneath; hold Ctrl over it to use it.
+- Appearance (Settings → Appearance): dark / light / match Windows, accent from the cover or a fixed color, cover-blur / plain / glass background, corner style, overall size, a big-cover layout instead of lyrics, lyrics text size, and which extras to show.
 
 ## Connect Spotify (one-time)
 

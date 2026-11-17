@@ -182,8 +182,77 @@ function renderMedia() {
   renderUpNext();
   updateMiniLyricVisibility();
   renderVolume();
-  shell.style.setProperty('--np-accent', (t && t.accent) || '#1ed760');
+  applyAccent();
 }
+
+// ---------- appearance ----------
+const LOOK_DEFAULTS = {
+  theme: 'dark', accentMode: 'cover', accentColor: '#1ed760', background: 'cover', corners: 'round',
+  uiScale: 1, layout: 'lyrics', lyricsSize: 'm', showUpNext: true, showSources: true, miniLyrics: true, outline: false,
+};
+const SWATCHES = ['#1ed760', '#d97757', '#5b8cff', '#a67cff', '#ff6fae', '#f0b44c', '#3fd6c6', '#f2f1ee'];
+const darkScheme = window.matchMedia('(prefers-color-scheme: dark)');
+function look(k) { return settings[k] ?? LOOK_DEFAULTS[k]; }
+function applyAccent() {
+  const t = media.track;
+  const c = look('accentMode') === 'fixed' ? look('accentColor') : (t && t.accent) || '#1ed760';
+  shell.style.setProperty('--np-accent', c);
+}
+function applyAppearance() {
+  const root = document.documentElement.dataset;
+  const theme = look('theme') === 'system' ? (darkScheme.matches ? 'dark' : 'light') : look('theme');
+  if (root.theme !== theme) {
+    // Switch colors instantly: no half-finished color transitions left behind.
+    const html = document.documentElement;
+    html.classList.add('theme-switch');
+    root.theme = theme;
+    void html.offsetWidth;
+    requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove('theme-switch')));
+  }
+  root.bg = look('background');
+  root.corners = look('corners');
+  root.layout = look('layout');
+  root.lysize = look('lyricsSize');
+  root.upnext = look('showUpNext') ? 'on' : 'off';
+  root.sources = look('showSources') ? 'on' : 'off';
+  root.outline = look('outline') ? 'on' : 'off';
+  applyAccent();
+  updateMiniLyricVisibility();
+  renderAppearanceControls();
+}
+darkScheme.addEventListener('change', () => { if (look('theme') === 'system') applyAppearance(); });
+function saveLook(patch) {
+  settings = { ...settings, ...patch };
+  applyAppearance();
+  np.setSettings(patch);
+}
+function renderAppearanceControls() {
+  document.querySelectorAll('#appearance .seg[data-pref]').forEach((seg) => {
+    const v = String(look(seg.dataset.pref));
+    seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+  });
+  document.querySelectorAll('#appearance [data-pref-bool]').forEach((i) => { i.checked = !!look(i.dataset.prefBool); });
+  const fixed = look('accentMode') === 'fixed';
+  const cur = String(look('accentColor')).toLowerCase();
+  const box = $('swatches');
+  box.hidden = !fixed;
+  if (document.activeElement && document.activeElement.id === 'customColor') return; // don't rebuild under an open color picker
+  box.innerHTML = SWATCHES.map((c) => `<button class="swatch ${cur === c ? 'on' : ''}" style="--c:${c}" data-c="${c}" title="${c}"></button>`).join('')
+    + `<label class="swatch custom ${!SWATCHES.includes(cur) ? 'on' : ''}" title="Pick any color"><input type="color" id="customColor" value="${esc(/^#[0-9a-f]{6}$/.test(cur) ? cur : '#1ed760')}" /></label>`;
+  box.querySelectorAll('[data-c]').forEach((b) => { b.onclick = () => saveLook({ accentMode: 'fixed', accentColor: b.dataset.c }); });
+  const cc = $('customColor');
+  cc.oninput = () => { settings.accentMode = 'fixed'; settings.accentColor = cc.value; applyAccent(); }; // live preview
+  cc.onchange = () => saveLook({ accentMode: 'fixed', accentColor: cc.value });
+}
+document.querySelectorAll('#appearance .seg[data-pref] button').forEach((b) => {
+  b.onclick = () => {
+    const pref = b.parentElement.dataset.pref;
+    const v = pref === 'uiScale' ? Number(b.dataset.v) : b.dataset.v;
+    saveLook({ [pref]: v });
+  };
+});
+document.querySelectorAll('#appearance [data-pref-bool]').forEach((i) => { i.onchange = () => saveLook({ [i.dataset.prefBool]: i.checked }); });
+$('resetLook').onclick = () => saveLook({ ...LOOK_DEFAULTS });
 
 // ---------- volume ----------
 let volLocalAt = 0, volSendTimer = null, volPending = null;
@@ -286,7 +355,7 @@ function renderUpNext() {
 
 // ---------- mini player lyric line ----------
 function miniLyricsOn() {
-  return shell.dataset.mode === 'mini' && lyrics.status === 'found' && lyrics.synced.length > 0 && !!media.track;
+  return shell.dataset.mode === 'mini' && look('miniLyrics') && lyrics.status === 'found' && lyrics.synced.length > 0 && !!media.track;
 }
 function updateMiniLyricVisibility() {
   const on = miniLyricsOn();
@@ -852,6 +921,7 @@ np.onSettings((s) => {
   if (offSaveTimer) s.lyricsOffsets = settings.lyricsOffsets; // a timing change is about to be saved
   settings = s;
   applyMiniLook();
+  applyAppearance();
   if (s.mode && shell.dataset.mode !== s.mode) shell.dataset.mode = s.mode;
   $('sizeBtn').classList.toggle('on', !!s.large);
   $('icoGrow').hidden = !!s.large; $('icoShrink').hidden = !s.large;
@@ -879,6 +949,7 @@ np.onSpotifyStatus((s) => { media.spotify = s; if (!$('settings').hidden) fillSe
   settings = await np.getSettings();
   shell.dataset.mode = settings.mode || 'full';
   applyMiniLook();
+  applyAppearance();
   $('sizeBtn').classList.toggle('on', !!settings.large);
   $('icoGrow').hidden = !!settings.large; $('icoShrink').hidden = !settings.large;
   setTab(settings.tab || 'playing');

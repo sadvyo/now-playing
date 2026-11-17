@@ -60,6 +60,9 @@ class Updater extends EventEmitter {
     const repo = this.repo();
     if (!repo) { this._set({ status: 'off' }); return this.state; }
     if (this.busy || this.state.status === 'ready') return this.state;
+    // Rapid repeated clicks shouldn't turn into a burst of requests to GitHub.
+    if (manual && this.lastCheckAt && Date.now() - this.lastCheckAt < 10000) return this.state;
+    this.lastCheckAt = Date.now();
     this.busy = true;
     this._set({ status: 'checking', error: null });
     try {
