@@ -29,6 +29,7 @@ const DEFAULTS = {
   miniOpacity: 1,             // mini player transparency (0.3 – 1)
   clickThrough: false,        // mini player lets clicks pass through to what's under it
   lyricsOffsets: {},          // song key -> ms to shift synced lyrics (positive = later)
+  lyricsChoice: {},           // song key -> LRCLIB id picked by hand, or 'none'
   // Appearance
   theme: 'dark',              // 'dark' | 'light' | 'system'
   accentMode: 'cover',        // 'cover' (from the album art) | 'fixed'
@@ -45,6 +46,18 @@ const DEFAULTS = {
   autoDownload: true,         // download updates in the background
   updateRepo: '',             // override GitHub repo for updates (owner/name)
   miniPos: null,
+  // Desktop lyrics (the current line floating over the screen)
+  desktopLyrics: false,
+  desktopLyricsSize: 'm',     // 's' | 'm' | 'l' | 'xl'
+  desktopLyricsLook: 'outline', // 'outline' | 'box'
+  desktopLyricsNext: true,    // show the next line under it
+  desktopLyricsFill: true,    // karaoke fill
+  desktopLyricsPos: null,     // { cx, bottom } in screen pixels
+  // Listening stats (stats.json, never leaves this PC)
+  statsEnabled: true,
+  statsBrowsers: true,        // count videos playing in browsers
+  statsRange: 'week',         // Stats tab: 'today' | 'week' | 'month' | 'all'
+  lastPlaylist: null,         // playlist used last (shown first)
 };
 
 let file;

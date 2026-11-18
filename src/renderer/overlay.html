@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+<title>Now Playing - desktop lyrics</title>
+<link rel="stylesheet" href="overlay.css" />
+</head>
+<body>
+<div class="stage idle" id="stage">
+  <div class="tools" id="tools">
+    <span class="hint">Drag to move</span>
+    <button id="smaller" title="Smaller text">A−</button>
+    <button id="bigger" title="Bigger text">A+</button>
+    <button id="done" class="done">Done</button>
+  </div>
+  <div class="box" id="box">
+    <div class="cur" id="cur"><span class="base" id="base"></span><span class="hl" id="hl" aria-hidden="true"><span class="hl-in" id="hlIn"></span></span></div>
+    <div class="next" id="next"></div>
+  </div>
+</div>
+<script src="overlay.js"></script>
+</body>
+</html>

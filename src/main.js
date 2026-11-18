@@ -1,19 +1,22 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, screen, shell, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, screen, shell, nativeImage, Notification, powerMonitor } = require('electron');
 const path = require('path');
 const store = require('./store');
 const { SMTC } = require('./media/smtc');
 const { Spotify } = require('./media/spotify');
-const { fetchLyrics } = require('./media/lyrics');
+const { fetchLyrics, candidates: lyricCandidates, byId: lyricsById } = require('./media/lyrics');
 const { ClaudeSessions } = require('./claude/sessions');
 const { ClaudeChats } = require('./claude/chats');
 const { ClaudeDesktop } = require('./claude/desktop');
 const { findArtwork } = require('./media/artwork');
 const { Updater } = require('./updater');
 const { accentFor, cachedAccent } = require('./media/accent');
+const { Stats } = require('./stats');
+const { LyricsOverlay } = require('./overlay');
 const PKG = require('../package.json');
 const fs = require('fs');
 
 const MOCK = process.env.NP_MOCK === '1';
+const SPOTIFY_URI = /^spotify:(track|episode):[A-Za-z0-9]{10,40}$/;
 const SIZES = { compact: [380, 600], large: [540, 820], mini: [400, 112] };
 const isMini = () => store.get('mode') === 'mini';
 let W = 380, H = 600;
@@ -33,6 +36,10 @@ let chats = null;
 let updater = null;
 let desktop = null;
 let chatState = { tasks: [] };
+let stats = null;            // listening stats (local file)
+let mockCandidates = null;   // sample lyrics matches (mock mode)
+let overlay = null;          // desktop lyrics window
+let popupActive = false;
 const notified = new Map(); // id -> signature of the last alert we showed
 const artFound = new Map(); // trackKey -> url | null
 
@@ -48,6 +55,8 @@ function log(msg) {
 process.on('uncaughtException', (e) => log('uncaught: ' + (e.stack || e)));
 process.on('unhandledRejection', (e) => log('unhandled: ' + (e?.stack || e)));
 
+// Test runs can use their own settings folder (never touches the real one).
+if (MOCK && process.env.NP_USERDATA) app.setPath('userData', process.env.NP_USERDATA);
 if (!MOCK && !app.requestSingleInstanceLock()) { app.exit(0); }
 // A small widget doesn't need a GPU process (saves ~100 MB and a process).
 app.disableHardwareAcceleration();
@@ -67,6 +76,9 @@ function send(ch, data) {
   if (LIVE.has(ch) && !win.isVisible() && !MOCK) { dirty = true; return; }
   win.webContents.send(ch, data);
 }
+
+// Settings as the pop-up sees them (no secrets) plus a little live state.
+function pubSettings() { return { ...store.publicSettings(), overlayMoving: !!overlay?.moving }; }
 
 // ---------- window ----------
 function uiScale() {
@@ -224,6 +236,7 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: 'Show / hide', click: () => toggleWindow() },
     { label: 'Mini player', type: 'checkbox', checked: s.mode === 'mini', click: (i) => setSettings({ mode: i.checked ? 'mini' : 'full' }) },
+    { label: 'Desktop lyrics', type: 'checkbox', checked: !!s.desktopLyrics, click: (i) => setSettings({ desktopLyrics: i.checked }) },
     ...(s.mode === 'mini' ? [{ label: 'Click-through mini player', type: 'checkbox', checked: !!s.clickThrough, click: (i) => setSettings({ clickThrough: i.checked }) }] : []),
     { type: 'separator' },
     { label: 'Keep on screen (pin)', type: 'checkbox', checked: !!s.pinned, click: (i) => setSettings({ pinned: i.checked }) },
@@ -306,7 +319,7 @@ function applyHotkey(prev) {
 }
 
 // ---------- global media hotkeys ----------
-const MEDIA_HOTKEYS = ['playPause', 'next', 'previous', 'volUp', 'volDown', 'clickThrough'];
+const MEDIA_HOTKEYS = ['playPause', 'next', 'previous', 'volUp', 'volDown', 'clickThrough', 'desktopLyrics'];
 let mediaRegistered = [];
 let hotkeyStatus = {};
 function applyMediaHotkeys() {
@@ -331,6 +344,7 @@ function onMediaHotkey(name) {
     const t = nowPlaying;
     if (t && typeof t.volume === 'number') setVolumeLevel(t.volume + (name === 'volUp' ? 5 : -5));
   } else if (name === 'clickThrough') setSettings({ clickThrough: !store.get('clickThrough') });
+  else if (name === 'desktopLyrics') setSettings({ desktopLyrics: !store.get('desktopLyrics') });
 }
 
 // ---------- mini player look: transparency + click-through ----------
@@ -354,12 +368,14 @@ function setSettings(patch) {
   if ('spotifyPort' in patch || 'spotifyClientId' in patch) send('spotify:status', spotify.status());
   if ('claudeDir' in patch || 'claudeLookbackHours' in patch) claude.scan();
   if ('uiScale' in patch) applyZoom();
+  if ('desktopLyrics' in patch && !patch.desktopLyrics) overlay?.setMoving(false);
+  if ('desktopLyricsSize' in patch || 'desktopLyricsNext' in patch || 'desktopLyricsPos' in patch) overlay?.relayout();
   if (('large' in patch || 'mode' in patch || 'uiScale' in patch) && win) {
     applySize(); positionWindow();
     if ('mode' in patch && !win.isVisible()) toggleWindow(true);
   }
   recompute();
-  const out = { ...store.publicSettings(), hotkeyOk, hotkeyStatus };
+  const out = { ...pubSettings(), hotkeyOk, hotkeyStatus };
   send('settings', out);
   return out;
 }
@@ -384,11 +400,11 @@ function pickTrack() {
   const othersPlaying = sys.some((x) => x.isPlaying && x.app !== s.preferredApp) || !!(sp && sp.isPlaying);
   if (s.preferredApp && (!pref || !pref.isPlaying) && othersPlaying) {
     store.set({ preferredApp: null }); pref = null; s.preferredApp = null;
-    send('settings', store.publicSettings());
+    send('settings', pubSettings());
   }
   if (s.source === 'spotify' && !(sp && sp.isPlaying) && sys.some((x) => x.isPlaying)) {
     store.set({ source: 'auto' }); s.source = 'auto';
-    send('settings', store.publicSettings());
+    send('settings', pubSettings());
   }
 
   const sysBest = () => {
@@ -420,12 +436,30 @@ function wantsLyrics(t) {
   return !!store.get('lyricsForAll');
 }
 
+// Per-song lyrics choice from the "Wrong lyrics?" picker: an LRCLIB id, or 'none'.
+function lyricsChoice(key) { return (store.get('lyricsChoice') || {})[key]; }
+function setLyricsChoice(key, value) {
+  const map = { ...(store.get('lyricsChoice') || {}) };
+  delete map[key];
+  if (value != null) map[key] = value;
+  const keys = Object.keys(map);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 500))) delete map[k]; // keep the last 500 songs
+  store.set({ lyricsChoice: map });
+}
+
 async function loadLyrics(t, key) {
+  const choice = lyricsChoice(key);
+  if (choice === 'none') {
+    lyricsState = { key, status: 'hidden', synced: [], plain: '' };
+    send('lyrics', lyricsState);
+    syncOverlay();
+    return;
+  }
   lyricsState = { key, status: 'loading', synced: [], plain: '' };
   send('lyrics', lyricsState);
   try {
     const clean = !(t.source === 'spotify' || /spotify/i.test(t.app || ''));
-    const r = await fetchLyrics(t, { clean });
+    const r = choice != null ? await lyricsById(choice) : await fetchLyrics(t, { clean });
     if (lastTrackKey !== key) return;
     lyricsState = { key, ...r };
   } catch (e) {
@@ -433,6 +467,15 @@ async function loadLyrics(t, key) {
     lyricsState = { key, status: 'error', synced: [], plain: '', error: e.message };
   }
   send('lyrics', lyricsState);
+  syncOverlay();
+}
+
+// ---------- desktop lyrics + stats ----------
+function syncOverlay() {
+  overlay?.sync({ track: nowPlaying, key: lastTrackKey, lyrics: lyricsState });
+}
+function statsTick() {
+  stats?.tick(nowPlaying, { enabled: store.get('statsEnabled') !== false, browsers: store.get('statsBrowsers') !== false });
 }
 
 // Fill in a cover from iTunes/Deezer when the player didn't provide a picture.
@@ -499,19 +542,26 @@ function recompute() {
   const sig = JSON.stringify(payload, (k, v) => (k === 'sampledAt' ? undefined : v));
   if (sig !== lastMediaSig) { lastMediaSig = sig; send('media', payload); }
   updateTrayTooltip();
+  statsTick();
+  syncOverlay();
 }
 
-// Poll fast only while the pop-up is on screen.
+// Poll fast only while the pop-up (or the desktop lyrics) is on screen.
 function setActive(on) {
-  spotify?.setInterval(on ? 2000 : 10000);
-  smtc?.setRate(on ? 1000 : 3000);
+  popupActive = on;
   claude?.start(on ? 3000 : 15000);
+  applyPollRates();
+}
+function applyPollRates() {
+  const fast = popupActive || !!overlay?.visible;
+  spotify?.setInterval(fast ? 2000 : 10000);
+  smtc?.setRate(fast ? 1000 : 3000);
 }
 
 function pushAll() {
   dirty = false;
   lastMediaSig = null; lastArtSent = undefined;
-  send('settings', store.publicSettings());
+  send('settings', pubSettings());
   recompute();
   send('lyrics', lyricsState);
   if (claude) send('claude', { sessions: claude.sessions, root: claude.root, found: claude.found });
@@ -627,7 +677,7 @@ async function setVolumeLevel(level) {
 
 // ---------- IPC ----------
 function registerIpc() {
-  ipcMain.handle('settings:get', () => store.publicSettings());
+  ipcMain.handle('settings:get', () => pubSettings());
   ipcMain.handle('settings:set', (_e, patch) => setSettings(patch || {}));
   ipcMain.handle('app:ready', () => {
     rendererReady = true;
@@ -642,6 +692,36 @@ function registerIpc() {
   ipcMain.handle('chats:dismiss', (_e, id) => chats?.dismiss(id));
   ipcMain.handle('chats:clear', () => chats?.clearFinished());
   ipcMain.handle('bridge:install', () => installBridge());
+  // "Wrong lyrics?" picker
+  ipcMain.handle('lyrics:candidates', async (_e, query) => {
+    const t = nowPlaying;
+    query = String(query || '').slice(0, 200);
+    if (MOCK && mockCandidates) return mockCandidates;
+    if (!t && !query) return { ok: false, items: [] };
+    try {
+      const clean = t ? !(t.source === 'spotify' || /spotify/i.test(t.app || '')) : false;
+      const items = await lyricCandidates(t || {}, { clean, query: query || '' });
+      return { ok: true, items, current: lyricsState.id ?? null, choice: lastTrackKey ? lyricsChoice(lastTrackKey) ?? null : null };
+    } catch (e) { return { ok: false, items: [], error: e.message }; }
+  });
+  ipcMain.handle('lyrics:choose', (_e, value) => {
+    // value: an LRCLIB id, 'none' (no lyrics for this song) or 'auto' (let the app pick)
+    if (!lastTrackKey || !nowPlaying) return false;
+    if (value !== 'none' && value !== 'auto' && !(Number.isInteger(value) && value > 0)) return false;
+    setLyricsChoice(lastTrackKey, value === 'auto' ? null : value);
+    loadLyrics(nowPlaying, lastTrackKey);
+    return true;
+  });
+
+  // Desktop lyrics: Move mode (drag it where you want it)
+  ipcMain.handle('overlay:move', (_e, on) => {
+    if (on && !store.get('desktopLyrics')) setSettings({ desktopLyrics: true });
+    return overlay ? overlay.setMoving(!!on) : false;
+  });
+  // Listening stats (kept on this PC only)
+  ipcMain.handle('stats:get', (_e, range) => { statsTick(); return stats ? stats.summary(range) : null; });
+  ipcMain.handle('stats:reset', () => { stats?.reset(); return stats ? stats.summary('week') : null; });
+
   ipcMain.handle('update:state', () => updater?.state);
   ipcMain.handle('update:check', () => updater?.check(true));
   ipcMain.handle('update:apply', () => updater?.apply());
@@ -669,6 +749,34 @@ function registerIpc() {
     recompute();
     return r;
   });
+  // Devices, search & queue, playlists (all need the Spotify account connected)
+  const needSpotify = () => (spotify?.isConnected() ? null : { ok: false, error: 'Connect your Spotify account in Settings first.' });
+  ipcMain.handle('spotify:devices', async () => needSpotify() || spotify.devices());
+  ipcMain.handle('spotify:search', async (_e, q, offset) => needSpotify() || spotify.search(String(q || '').slice(0, 200), Math.min(990, Math.max(0, Number(offset) | 0))));
+  const badUri = (uri) => (typeof uri === 'string' && SPOTIFY_URI.test(uri) ? null : { ok: false, error: 'Unknown song.' });
+  ipcMain.handle('spotify:playNow', async (_e, uri) => needSpotify() || badUri(uri) || spotify.playNow(uri));
+  ipcMain.handle('spotify:queue', async (_e, uri) => needSpotify() || badUri(uri) || spotify.addToQueue(uri));
+  ipcMain.handle('spotify:transfer', async (_e, id) => {
+    const n = needSpotify(); if (n) return n;
+    if (typeof id !== 'string' || !id || id.length > 200) return { ok: false, error: 'Unknown device.' };
+    return spotify.transfer(id, nowPlaying?.source === 'spotify' ? nowPlaying.isPlaying : true);
+  });
+  ipcMain.handle('spotify:playlists', async (_e, force) => {
+    const n = needSpotify(); if (n) return n;
+    if (spotify.canPlaylists() === false) return { ok: false, needsReconnect: true, items: [] };
+    return spotify.playlists(!!force);
+  });
+  // uri: the song the panel was opened for (it may have changed since); else the current one.
+  ipcMain.handle('spotify:addToPlaylist', async (_e, id, uri) => {
+    const n = needSpotify(); if (n) return n;
+    const t = nowPlaying;
+    const song = typeof uri === 'string' && SPOTIFY_URI.test(uri) ? uri : t && t.source === 'spotify' ? t.uri : null;
+    if (!song) return { ok: false, error: 'Adding to playlists works for songs playing from your Spotify account.' };
+    if (typeof id !== 'string' || !/^[A-Za-z0-9]+$/.test(id)) return { ok: false, error: 'Unknown playlist.' };
+    const r = await spotify.addToPlaylist(id, song);
+    if (r.ok) store.set({ lastPlaylist: id });
+    return r;
+  });
   ipcMain.handle('spotify:disconnect', () => { spotify.disconnect(); recompute(); return spotify.status(); });
 
   // Volume: the playing app's own volume on this PC (native helper), or the
@@ -692,7 +800,8 @@ function startMock() {
     source: 'spotify', app: 'spotify-web-api', appName: 'Spotify', title: 'Midnight City', artist: 'M83',
     album: "Hurry Up, We're Dreaming", art: null, isPlaying: true, durationMs: 243000, positionMs: 62000,
     sampledAt: now, canNext: true, canPrev: true, canSeek: true, device: 'MY-PC',
-    uri: 'spotify:track:mock', liked: true, canLike: true,
+    uri: 'spotify:track:0mockMidnightCity00000', liked: true, canLike: true,
+    artists: ['M83'],
     upNext: [
       { title: 'Outro', artist: 'M83', art: null },
       { title: 'Wait', artist: 'M83', art: null },
@@ -714,6 +823,67 @@ function startMock() {
     ],
   };
   lastTrackKey = 'spotify|midnight city|m83';
+
+  // Spotify extras (devices, search, playlists) with sample data
+  const img = null;
+  spotify.canPlaylists = () => true;
+  spotify.devices = async () => ({ ok: true, devices: [
+    { id: 'pc', name: 'MY-PC', type: 'Computer', active: true },
+    { id: 'phone', name: 'Pixel 8', type: 'Smartphone', active: false },
+    { id: 'kitchen', name: 'Kitchen speaker', type: 'Speaker', active: false },
+    { id: 'tv', name: 'Living room TV', type: 'TV', active: false, restricted: true },
+  ] });
+  spotify.transfer = async () => ({ ok: true });
+  spotify.search = async (q) => ({ ok: true, more: true, total: 40, offset: 0, items: [
+    { uri: 'spotify:track:0mockSearchResult00001', title: 'Midnight City', artist: 'M83', album: "Hurry Up, We're Dreaming", art: img, durationMs: 243000 },
+    { uri: 'spotify:track:0mockSearchResult00002', title: 'Midnight City — Eric Prydz Remix', artist: 'M83, Eric Prydz', album: 'Midnight City (Remixes)', art: img, durationMs: 412000 },
+    { uri: 'spotify:track:0mockSearchResult00003', title: 'Wait', artist: 'M83', album: "Hurry Up, We're Dreaming", art: img, durationMs: 343000 },
+    { uri: 'spotify:track:0mockSearchResult00004', title: 'Outro', artist: 'M83', album: "Hurry Up, We're Dreaming", art: img, durationMs: 247000, explicit: false },
+    { uri: 'spotify:track:0mockSearchResult00005', title: 'Kids', artist: 'MGMT', album: 'Oracular Spectacular', art: img, durationMs: 302000, explicit: true },
+  ].filter((x) => !q || x.title.toLowerCase().includes(String(q).toLowerCase().split(' ')[0]) || x.artist.toLowerCase().includes(String(q).toLowerCase())) });
+  spotify.playNow = async () => ({ ok: true });
+  spotify.addToQueue = async () => ({ ok: true });
+  spotify.playlists = async () => ({ ok: true, items: [
+    { id: 'pl1', name: 'Night drive', art: img, count: 48 },
+    { id: 'pl2', name: 'Focus', art: img, count: 112 },
+    { id: 'pl3', name: 'Gym', art: img, count: 35 },
+    { id: 'pl4', name: 'Road trip with friends', art: img, count: 77, collaborative: true },
+  ] });
+  spotify.addToPlaylist = async () => ({ ok: true });
+  mockCandidates = { ok: true, current: 101, choice: null, items: [
+    { id: 101, title: 'Midnight City', artist: 'M83', album: "Hurry Up, We're Dreaming", durationMs: 243000, synced: true },
+    { id: 102, title: 'Midnight City', artist: 'M83', album: 'Midnight City (Remixes)', durationMs: 412000, synced: true },
+    { id: 103, title: 'Midnight City (Live)', artist: 'M83', album: 'Live at the Hollywood Bowl', durationMs: 289000, synced: false },
+    { id: 104, title: 'Midnight City', artist: 'M83', album: 'Saturdays = Youth (Deluxe)', durationMs: 244000, synced: true },
+  ] };
+
+  // Listening stats: three weeks of made-up listening (kept in memory only).
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const songs = [
+    ['Midnight City', 'M83', 243], ['Wait', 'M83', 343], ['Outro', 'M83', 247], ['Kids', 'MGMT', 302],
+    ['Electric Feel', 'MGMT', 229], ['Let It Happen', 'Tame Impala', 467], ['The Less I Know the Better', 'Tame Impala', 216],
+    ['1901', 'Phoenix', 193], ['Digital Love', 'Daft Punk', 301], ['D.A.N.C.E.', 'Justice', 242],
+  ];
+  const nowMs = Date.now();
+  const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+  for (let k = 20; k >= 0; k--) {
+    for (const hour of [8, 13, 19, 21]) {
+      if (rnd() < 0.45) continue;
+      let t = today0.getTime() - k * 86400000 + hour * 3600000 + Math.floor(rnd() * 40) * 60000;
+      const count = 3 + Math.floor(rnd() * 9);
+      for (let n = 0; n < count && t < nowMs - 3600000; n++) {
+        const sg = songs[Math.floor(Math.pow(rnd(), 1.7) * songs.length)];
+        for (let p = 0; p <= sg[2] * 1000; p += 10000) {
+          stats.tick({ source: 'spotify', title: sg[0], artist: sg[1], artists: [sg[1]], isPlaying: true, positionMs: p, sampledAt: t, durationMs: sg[2] * 1000 }, {}, t);
+          t += 10000;
+        }
+      }
+      stats.tick(null, {}, t);
+    }
+  }
+  stats.lastTick = 0;
+
   setTimeout(() => {
     if (process.env.NP_EMPTY) return;
     chats.apply('/claude/progress', { task: 'Research notes', done: 3, total: 6, step: 'Writing the second section' });
@@ -753,6 +923,16 @@ app.whenReady().then(() => {
   chats.on('update', (d) => { chatState = d; send('chats', d); updateTrayTooltip(); if (!MOCK) checkAlerts(); });
   chats.on('finished', (t) => { if (!MOCK) alertDone({ title: `Claude finished · ${t.task}`, body: t.summary }); });
 
+  stats = new Stats(app.getPath('userData'), { log, readonly: MOCK });
+  overlay = new LyricsOverlay({
+    store, log,
+    saveSettings: (patch) => setSettings(patch),
+    onChange: () => { applyPollRates(); send('settings', pubSettings()); },
+  });
+  setInterval(statsTick, 15000); // keeps counting even when nothing changes on screen
+  // Save the stats before the PC sleeps or shuts down (otherwise they're saved once a minute).
+  for (const ev of ['suspend', 'shutdown', 'lock-screen']) powerMonitor.on(ev, () => { try { statsTick(); stats.flush(); } catch {} });
+
   registerIpc();
   applySize();
   createWindow();
@@ -765,15 +945,27 @@ app.whenReady().then(() => {
     applySize();
     claude.scan();
     win.once('ready-to-show', () => { win.setPosition(0, 0); win.show(); });
+    if (process.env.NP_OVERLAY) setSettings({ desktopLyrics: true, ...(process.env.NP_OVERLAY.startsWith('{') ? JSON.parse(process.env.NP_OVERLAY) : {}) });
+    if (process.env.NP_MOVE && !process.env.NP_SHOT) setTimeout(() => overlay.setMoving(true), 3000);
     if (process.env.NP_SHOT) {
-      setTimeout(async () => {
+      // Start the scripted steps once the page says it's ready (slow machines load later).
+      const whenReady = (fn) => { const t = setInterval(() => { if (rendererReady) { clearInterval(t); setTimeout(fn, 1500); } }, 100); };
+      whenReady(async () => {
         if (process.env.NP_SETTINGS) send('ui:open-settings');
+        if (process.env.NP_UI) win.webContents.send('ui:action', JSON.parse(process.env.NP_UI));
+        if (process.env.NP_MOVE) overlay.setMoving(true);
+        if (process.env.NP_OVERLAY_SHOT) {
+          await new Promise((r) => setTimeout(r, 900));
+          const ov = overlay.win && !overlay.win.isDestroyed() ? await overlay.win.webContents.capturePage() : null;
+          if (ov) require('fs').writeFileSync(process.env.NP_OVERLAY_SHOT, ov.toPNG());
+          else log('mock: no overlay window to capture');
+        }
         if (process.env.NP_SWITCH) { setSettings({ large: true }); await new Promise((r) => setTimeout(r, 300)); setSettings({ mode: process.env.NP_SWITCH }); }
         await new Promise((r) => setTimeout(r, 600));
         const img = await win.webContents.capturePage();
         require('fs').writeFileSync(process.env.NP_SHOT, img.toPNG());
         app.exit(0);
-      }, 2500);
+      });
     }
     return;
   }
@@ -823,6 +1015,7 @@ app.on('second-instance', () => toggleWindow(true));
 app.on('window-all-closed', (e) => e.preventDefault());
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  try { statsTick(); stats?.flush(); } catch {}
   smtc?.stop();
   spotify?.stop();
   claude?.stop();

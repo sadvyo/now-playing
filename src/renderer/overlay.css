@@ -1,0 +1,65 @@
+/* Desktop lyrics. Only the text is drawn; the rest of the window is see-through
+   and clicks go to whatever is underneath. */
+:root {
+  --font: 34px;
+  --accent: #1ed760;
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; cursor: default; }
+[hidden] { display: none !important; }
+
+.stage { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; padding: 0 8px 10px; }
+
+.box {
+  max-width: 100%; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center;
+  padding: calc(var(--font) * .16) calc(var(--font) * .55) calc(var(--font) * .2);
+  border-radius: calc(var(--font) * .42);
+  transition: opacity .35s ease, transform .35s ease;
+}
+/* nothing to show / paused: fade away (after a short pause, not instantly) */
+.stage.idle .box { opacity: 0; transform: translateY(8px); }
+.stage.paused .box { opacity: 0; transition-delay: 2.5s; }
+:root[data-style="box"] .box { background: rgb(14 14 18 / .62); box-shadow: 0 8px 30px rgb(0 0 0 / .35); }
+
+.cur {
+  position: relative; display: inline-block; white-space: nowrap;
+  font-size: var(--font); font-weight: 800; line-height: 1.32; letter-spacing: -.01em;
+  color: #fff;
+  text-shadow: 0 0 1px rgb(0 0 0 / .95), 0 0 3px rgb(0 0 0 / .75), 0 2px 10px rgb(0 0 0 / .55);
+}
+:root[data-style="box"] .cur { text-shadow: 0 1px 2px rgb(0 0 0 / .45); }
+.cur.blank { color: rgb(255 255 255 / .6); }
+.cur.enter { animation: enter .24s ease-out; }
+@keyframes enter { from { opacity: 0; transform: translateY(.2em); } }
+
+/* Karaoke fill: two layers that slide in opposite directions, so the colored copy
+   is revealed left to right. Both are plain transforms the compositor animates by
+   itself: no work for the page while a line fills. */
+.hl { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; color: var(--accent); will-change: transform; transform: translateX(-100%); }
+.hl-in { display: block; width: 100%; will-change: transform; transform: translateX(100%); }
+:root[data-fill="off"] .hl, .cur.blank .hl { display: none; }
+
+.next {
+  max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: calc(var(--font) * .56); font-weight: 700; line-height: 1.35; margin-top: calc(var(--font) * .04);
+  color: rgb(255 255 255 / .78);
+  text-shadow: 0 0 1px rgb(0 0 0 / .9), 0 0 3px rgb(0 0 0 / .7), 0 2px 8px rgb(0 0 0 / .5);
+}
+.next:empty { display: none; }
+:root[data-style="box"] .next { text-shadow: none; color: rgb(255 255 255 / .62); }
+:root[data-next="off"] .next { display: none; }
+
+/* Move mode: a visible handle you can drag, plus a small toolbar */
+.tools { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 4px; padding: 4px 4px 4px 12px; border-radius: 10px;
+  background: rgb(20 21 26 / .92); color: #f2f1ee; font: 600 12px "Segoe UI", system-ui, sans-serif; box-shadow: 0 6px 20px rgb(0 0 0 / .4); }
+.tools .hint { opacity: .7; margin-right: 6px; white-space: nowrap; }
+.tools button { font: inherit; color: inherit; background: rgb(255 255 255 / .08); border: 0; border-radius: 7px; padding: 5px 10px; cursor: pointer; }
+.tools button:hover { background: rgb(255 255 255 / .16); }
+.tools .done { background: var(--accent); color: #0b0b0d; }
+.tools .done:hover { background: var(--accent); filter: brightness(1.08); }
+.stage.moving { cursor: grab; background: rgb(0 0 0 / .28); border: 2px dashed rgb(255 255 255 / .55); border-radius: 14px; }
+.stage.moving.dragging { cursor: grabbing; }
+.stage.moving .tools { display: flex; }
+.stage.moving .box { opacity: 1 !important; transform: none !important; transition-delay: 0s !important; }

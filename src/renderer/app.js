@@ -39,10 +39,14 @@ function position() {
 
 // ---------- tabs ----------
 function setTab(tab) {
+  if (!['playing', 'claude', 'stats'].includes(tab)) tab = 'playing';
+  closeSheet();
   shell.dataset.tab = tab;
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   if (settings.tab !== tab) { settings.tab = tab; np.setSettings({ tab }); }
   if (tab === 'playing') { lyricIdx = -1; }
+  if (tab === 'stats') loadStats();
+  renderSpotifyExtras();
 }
 document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
@@ -58,7 +62,9 @@ $('mmPlay').onclick = () => { optimisticToggle(); np.control('toggle'); };
 $('mmNext').onclick = () => np.control('next');
 $('mmPrev').onclick = () => np.control('previous');
 function setMode(mode) {
+  if (mode === 'mini') closeSheet();
   shell.dataset.mode = mode;
+  renderSpotifyExtras();
   lyricIdx = -1; needsTick = true; updateMiniLyricVisibility();
   if (settings.mode !== mode) { settings.mode = mode; np.setSettings({ mode }); }
 }
@@ -67,8 +73,11 @@ $('logBtn').onclick = () => np.openLog();
 $('settingsBack').onclick = () => openSettings(false);
 np.onOpenSettings(() => openSettings(true));
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && sheetKind && $('settings').hidden) { e.preventDefault(); closeSheet(); return; }
   if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName)) return;
   if (e.key === 'Escape') { if (!$('settings').hidden) openSettings(false); else if (shell.dataset.mode !== 'mini') np.hide(); }
+  if (e.key === '3') setTab('stats');
+  if ((e.key === '/' || (e.ctrlKey && (e.key === 'f' || e.key === 'F'))) && media.spotify?.connected && shell.dataset.mode !== 'mini') { e.preventDefault(); setTab('playing'); openSearch(); return; }
   if (e.key === 'm' || e.key === 'M') setMode(shell.dataset.mode === 'mini' ? 'full' : 'mini');
   if (e.key === '[') setLyricsOffset(lyricsOffset() - 250);
   if (e.key === ']') setLyricsOffset(lyricsOffset() + 250);
@@ -179,6 +188,7 @@ function renderMedia() {
   renderPlayState();
   renderSources();
   renderLike();
+  renderSpotifyExtras();
   renderUpNext();
   updateMiniLyricVisibility();
   renderVolume();
@@ -432,6 +442,13 @@ function renderLyrics() {
     inner.innerHTML = `<div class="empty"><b>${esc(t.appName)}</b>Lyrics are shown for Spotify. Turn on <i>“Try lyrics for every player”</i> in Settings to look them up for this one too.</div>`;
     return;
   }
+  if (lyrics.status === 'hidden') {
+    box.classList.add('static');
+    inner.innerHTML = '<div class="empty"><b>Lyrics are off for this song</b>You turned them off for this one.<div class="row"><button class="btn ghost small" id="lyBack">Show lyrics again</button><button class="btn link small" id="lyPick">Pick other lyrics</button></div></div>';
+    $('lyBack').onclick = () => chooseLyrics('auto');
+    $('lyPick').onclick = () => openLyricsPicker();
+    return;
+  }
   if (lyrics.status === 'loading' || lyrics.status === 'idle') {
     box.classList.add('static');
     inner.innerHTML = '<div class="empty">Finding lyrics…</div>';
@@ -444,7 +461,8 @@ function renderLyrics() {
   }
   if (lyrics.status !== 'found') {
     box.classList.add('static');
-    inner.innerHTML = `<div class="empty"><b>No lyrics found</b>${lyrics.status === 'error' ? 'Could not reach the lyrics service.' : 'This track has no lyrics in the LRCLIB database yet.'}</div>`;
+    inner.innerHTML = `<div class="empty"><b>No lyrics found</b>${lyrics.status === 'error' ? 'Could not reach the lyrics service.' : 'This track has no lyrics in the LRCLIB database yet.'}<button class="btn ghost small" id="lySearch">Search for lyrics</button></div>`;
+    $('lySearch').onclick = () => openLyricsPicker();
     return;
   }
   if (lyrics.synced.length) {
@@ -483,6 +501,7 @@ function setLyricsOffset(ms) {
   offSaveTimer = setTimeout(() => { offSaveTimer = null; np.setSettings({ lyricsOffsets: settings.lyricsOffsets }); }, 500);
 }
 function renderSyncUI() {
+  renderLyFix();
   const box = $('lySync');
   const on = lyrics.status === 'found' && lyrics.synced.length > 0;
   box.hidden = !on;
@@ -708,6 +727,7 @@ function fillSettings() {
   $('claudeLookbackHours').value = String(settings.claudeLookbackHours || 12);
   renderSpotifyStatus();
   renderDiag();
+  renderDlControls();
 }
 
 function renderDiag() {
@@ -817,6 +837,7 @@ const SHORTCUTS = [
   ['volUp', 'Volume up'],
   ['volDown', 'Volume down'],
   ['clickThrough', 'Mini player click-through'],
+  ['desktopLyrics', 'Desktop lyrics on / off'],
 ];
 const SUGGESTED = {
   playPause: 'CommandOrControl+Alt+Space',
@@ -911,6 +932,487 @@ document.addEventListener('mousemove', (e) => {
 });
 document.addEventListener('mouseleave', () => { if (interactive) { interactive = false; np.setInteractive(false); shell.classList.remove('ct-live'); } });
 
+// ---------- icons used by the panels ----------
+const ICON = {
+  check: '<svg class="chk" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>',
+  play: '<svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z" class="fillsvg" /></svg>',
+  queue: '<svg viewBox="0 0 24 24"><path d="M4 6h11M4 11h11M4 16h6M15 14.5l5 3-5 3z" /></svg>',
+  search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></svg>',
+  note: '<svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>',
+};
+const DEV_ICON = {
+  Computer: '<svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="11.5" rx="1.6" /><path d="M8.5 20h7M12 16v4" /></svg>',
+  Smartphone: '<svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.2" /><path d="M11 18.5h2" /></svg>',
+  Tablet: '<svg viewBox="0 0 24 24"><rect x="4.5" y="2.5" width="15" height="19" rx="2.2" /><path d="M11 18.5h2" /></svg>',
+  Speaker: '<svg viewBox="0 0 24 24"><rect x="5.5" y="2.5" width="13" height="19" rx="2.2" /><circle cx="12" cy="14.5" r="3.2" /><path d="M12 7h.01" /></svg>',
+  TV: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="12.5" rx="1.6" /><path d="M8 21h8" /></svg>',
+  Automobile: '<svg viewBox="0 0 24 24"><path d="M5 16.5V12l2-5h10l2 5v4.5M3.5 12h17M5 16.5h14" /><circle cx="7.5" cy="18" r="1.6" /><circle cx="16.5" cy="18" r="1.6" /></svg>',
+  GameConsole: '<svg viewBox="0 0 24 24"><path d="M7 8h10a4 4 0 0 1 4 4v1a3.5 3.5 0 0 1-6.3 2.1L14 14h-4l-.7 1.1A3.5 3.5 0 0 1 3 13v-1a4 4 0 0 1 4-4zM8 10.5v3M6.5 12h3M16 11.5h.01M17.5 13h.01" /></svg>',
+};
+DEV_ICON.CastAudio = DEV_ICON.Speaker; DEV_ICON.AVR = DEV_ICON.Speaker; DEV_ICON.AudioDongle = DEV_ICON.Speaker;
+DEV_ICON.CastVideo = DEV_ICON.TV; DEV_ICON.STB = DEV_ICON.TV;
+const DEV_TYPE = { Computer: 'Computer', Smartphone: 'Phone', Tablet: 'Tablet', Speaker: 'Speaker', TV: 'TV', CastAudio: 'Cast speaker', CastVideo: 'Cast device', Automobile: 'Car', GameConsole: 'Game console', AVR: 'Receiver', STB: 'TV box', AudioDongle: 'Audio adapter' };
+
+// ---------- panel (slides up over the Playing tab) ----------
+let sheetKind = null;
+function openSheet(kind, title, full = false) {
+  sheetKind = kind;
+  $('sheetTitle').textContent = title;
+  $('sheet').classList.toggle('full', full);
+  $('sheetWrap').hidden = false;
+  const body = $('sheetBody');
+  body.innerHTML = '';
+  body.scrollTop = 0;
+  return body;
+}
+function closeSheet() {
+  if (!sheetKind) return;
+  sheetKind = null;
+  $('sheetWrap').hidden = true;
+  $('sheetBody').innerHTML = '';
+}
+$('sheetClose').onclick = closeSheet;
+$('sheetDim').onclick = closeSheet;
+const sheetMsg = (title, text, cls = '') => `<div class="sheet-msg ${cls}">${title ? `<b>${esc(title)}</b>` : ''}${text ? `<span>${esc(text)}</span>` : ''}</div>`;
+function note(msg) {
+  document.querySelectorAll('.toast.ok').forEach((x) => x.remove());
+  const d = document.createElement('div');
+  d.className = 'toast ok'; d.textContent = msg;
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 2800);
+}
+function showReconnect(body, why) {
+  body.innerHTML = `<div class="sheet-msg"><b>One more Spotify permission</b><span>${esc(why)} A Spotify login page opens in your browser.</span><button class="btn primary" id="rcBtn">Reconnect Spotify</button></div>`;
+  $('rcBtn').onclick = async () => {
+    const b = $('rcBtn'); b.disabled = true; b.textContent = 'Waiting for the browser…';
+    const r = await np.spotifyConnect();
+    if (r && r.status) media.spotify = r.status;
+    closeSheet();
+    if (r && !r.ok && r.error) alertBox(r.error); else note('Spotify reconnected');
+  };
+}
+
+// The Spotify-only buttons (playlist, devices, search) follow what's playing.
+function renderSpotifyExtras() {
+  const t = media.track;
+  const fromAccount = !!(t && t.source === 'spotify');
+  $('plBtn').classList.toggle('off', !(fromAccount && t.uri));
+  $('devBtn').classList.toggle('off', !fromAccount);
+  $('devBtn').title = fromAccount && t.device ? `Playing on ${t.device} — switch device` : 'Play on another device';
+  $('searchBtn').hidden = !media.spotify?.connected || shell.dataset.tab !== 'playing' || shell.dataset.mode === 'mini';
+}
+
+// ---------- move music between devices ----------
+async function openDevices() {
+  const body = openSheet('devices', 'Play on');
+  body.innerHTML = sheetMsg('', 'Looking for your devices…');
+  const r = await np.spotifyDevices();
+  if (sheetKind !== 'devices') return;
+  if (!r || !r.ok) { body.innerHTML = sheetMsg("Couldn't load your devices", r?.error || 'Try again in a moment.', 'err'); return; }
+  const list = r.devices || [];
+  if (!list.length) { body.innerHTML = sheetMsg('No devices found', 'Open Spotify on your PC, phone or speaker and it shows up here.'); return; }
+  body.innerHTML = list.map((d) => `<button class="row-btn ${d.active ? 'on' : ''}" data-id="${esc(d.id)}" ${d.restricted ? 'disabled' : ''}>
+      <span class="row-ico">${DEV_ICON[d.type] || DEV_ICON.Speaker}</span>
+      <span class="row-main"><span class="row-title">${esc(d.name)}</span><span class="row-sub">${d.active ? 'Playing here now' : d.restricted ? "Spotify doesn't allow controlling this one" : esc(DEV_TYPE[d.type] || 'Spotify device')}</span></span>
+      ${d.active ? ICON.check : ''}</button>`).join('')
+    + '<div class="sheet-note">Only devices with Spotify open show up. Switching needs Spotify Premium.</div>';
+  body.querySelectorAll('.row-btn[data-id]').forEach((b) => b.onclick = async () => {
+    const d = list.find((x) => x.id === b.dataset.id);
+    if (!d || d.active) { closeSheet(); return; }
+    const sub = b.querySelector('.row-sub');
+    b.classList.add('busy'); sub.textContent = 'Switching…';
+    const res = await np.spotifyTransfer(d.id);
+    if (sheetKind !== 'devices') return;
+    if (res && res.ok) { closeSheet(); note(`Playing on ${d.name}`); return; }
+    b.classList.remove('busy');
+    sub.textContent = res?.error || "Couldn't switch to this device";
+    sub.style.color = 'var(--warn)';
+  });
+}
+$('devBtn').onclick = () => openDevices();
+
+// ---------- add the current song to a playlist ----------
+const addedTo = new Set(); // "playlist|song" added during this session
+async function openPlaylists(force = false) {
+  const t = media.track;
+  if (!t || t.source !== 'spotify' || !t.uri) return;
+  const uri = t.uri, songTitle = t.title || 'This song';
+  const body = openSheet('playlists', 'Add to playlist');
+  body.innerHTML = sheetMsg('', 'Loading your playlists…');
+  const r = await np.spotifyPlaylists(force);
+  if (sheetKind !== 'playlists') return;
+  if (r && r.needsReconnect) { showReconnect(body, 'Adding songs to playlists needs a new permission.'); return; }
+  if (!r || !r.ok) { body.innerHTML = sheetMsg("Couldn't load your playlists", r?.error || 'Try again in a moment.', 'err'); return; }
+  const items = [...(r.items || [])];
+  const last = items.findIndex((p) => p.id === settings.lastPlaylist);
+  if (last > 0) items.unshift(items.splice(last, 1)[0]); // the one you used last comes first
+  if (!items.length) { body.innerHTML = sheetMsg('No playlists to add to', 'Songs can go into playlists you made or collaborate on. Create one in Spotify first.'); return; }
+  body.innerHTML = `<div class="row-sub" style="padding:0 8px 8px">${esc(songTitle)}${t.artist ? ' · ' + esc(t.artist) : ''}</div>`
+    + (items.length > 7 ? `<div class="search-bar">${ICON.search}<input id="plFilter" placeholder="Find a playlist" spellcheck="false" autocomplete="off" /></div>` : '')
+    + '<div id="plList"></div><button class="btn link small" id="plRefresh" style="margin:6px 4px 0">Refresh list</button>';
+  const draw = (q) => {
+    q = (q || '').trim().toLowerCase();
+    const shown = q ? items.filter((p) => p.name.toLowerCase().includes(q)) : items;
+    $('plList').innerHTML = shown.length ? shown.map((p) => {
+      const done = addedTo.has(p.id + '|' + uri);
+      const count = typeof p.count === 'number' ? `${p.count} song${p.count === 1 ? '' : 's'}` : '';
+      return `<button class="row-btn" data-id="${esc(p.id)}"><span class="row-ico">${p.art ? `<img src="${esc(p.art)}" alt="" loading="lazy">` : ICON.note}</span>
+        <span class="row-main"><span class="row-title">${esc(p.name)}</span><span class="row-sub">${esc([count, p.collaborative ? 'shared' : ''].filter(Boolean).join(' · '))}</span></span>${done ? ICON.check : ''}</button>`;
+    }).join('') : sheetMsg('', 'No playlist with that name.');
+    $('plList').querySelectorAll('.row-btn[data-id]').forEach((b) => b.onclick = () => addTo(items.find((p) => p.id === b.dataset.id), b));
+  };
+  const addTo = async (p, b) => {
+    if (!p) return;
+    const k = p.id + '|' + uri;
+    if (addedTo.has(k)) { note(`Already added to ${p.name}`); return; }
+    b.classList.add('busy');
+    const res = await np.spotifyAddToPlaylist(p.id, uri);
+    if (sheetKind !== 'playlists') return;
+    b.classList.remove('busy');
+    if (res && res.ok) {
+      addedTo.add(k);
+      settings.lastPlaylist = p.id;
+      closeSheet();
+      note(`Added to ${p.name}`);
+    } else if (res && res.needsReconnect) showReconnect(body, 'Adding songs to playlists needs a new permission.');
+    else alertBox(res?.error || "Couldn't add the song.");
+  };
+  draw('');
+  const f = $('plFilter');
+  if (f) f.oninput = () => draw(f.value);
+  $('plRefresh').onclick = () => openPlaylists(true);
+}
+$('plBtn').onclick = () => openPlaylists();
+
+// ---------- search Spotify: play now or add to queue ----------
+let search = { q: '', items: [], offset: 0, more: false };
+let searchTimer = null, searchSeq = 0;
+function openSearch() {
+  if (!media.spotify?.connected) { openSettings(true); return; }
+  const body = openSheet('search', 'Search Spotify', true);
+  body.innerHTML = `<div class="search-bar">${ICON.search}<input id="sq" placeholder="Songs, artists, albums…" spellcheck="false" autocomplete="off" /></div><div id="sres"></div>`;
+  const input = $('sq');
+  input.value = search.q;
+  renderSearch();
+  input.focus(); input.select();
+  input.oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(input.value), 320); };
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') { clearTimeout(searchTimer); runSearch(input.value, false, true); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); $('sres').querySelector('.row-btn')?.focus(); }
+  };
+}
+async function runSearch(q, more = false, force = false) {
+  q = String(q || '').trim();
+  if (!more && !force && q === search.q && (search.items.length || !q)) return;
+  const seq = ++searchSeq;
+  if (!q) { search = { q: '', items: [], offset: 0, more: false }; renderSearch(); return; }
+  const offset = more ? search.offset + 10 : 0;
+  if (!more) { search = { q, items: [], offset: 0, more: false }; renderSearch('loading'); }
+  const r = await np.spotifySearch(q, offset);
+  if (seq !== searchSeq || sheetKind !== 'search') return;
+  if (!r || !r.ok) { renderSearch('error', r?.error); return; }
+  search = { q, items: more ? [...search.items, ...r.items] : r.items, offset, more: !!r.more && offset + 10 < 1000 };
+  renderSearch();
+}
+function renderSearch(state, err) {
+  const box = $('sres');
+  if (!box) return;
+  if (state === 'loading') { box.innerHTML = sheetMsg('', 'Searching…'); return; }
+  if (state === 'error') { box.innerHTML = sheetMsg("Search didn't work", err || 'Try again in a moment.', 'err'); return; }
+  if (!search.q) { box.innerHTML = sheetMsg('', 'Type to search. Click a song to play it now, or use the queue button to play it next.'); return; }
+  if (!search.items.length) { box.innerHTML = sheetMsg('Nothing found', `No songs match “${search.q}”.`); return; }
+  box.innerHTML = search.items.map((it, i) => `<div class="row-btn" role="button" tabindex="0" data-i="${i}" title="Play now">
+      <span class="row-ico">${it.art ? `<img src="${esc(it.art)}" alt="" loading="lazy">` : ICON.note}</span>
+      <span class="row-main"><span class="row-title">${esc(it.title)}${it.explicit ? '<span class="tag e" title="Explicit">E</span>' : ''}</span><span class="row-sub">${esc([it.artist, it.album].filter(Boolean).join(' · '))}</span></span>
+      <span class="row-end">${fmt(it.durationMs)}<button class="row-act" data-q="${i}" title="Add to queue">${ICON.queue}</button></span></div>`).join('')
+    + (search.more ? '<button class="btn ghost small more-btn" id="sMore">More results</button>' : '');
+  box.querySelectorAll('.row-btn[data-i]').forEach((row) => {
+    const it = search.items[Number(row.dataset.i)];
+    row.onclick = () => playNow(it, row);
+    row.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); playNow(it, row); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); row.nextElementSibling?.focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); (row.previousElementSibling || $('sq'))?.focus(); }
+    };
+  });
+  box.querySelectorAll('.row-act[data-q]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); queueIt(search.items[Number(b.dataset.q)], b); });
+  const more = $('sMore');
+  if (more) more.onclick = () => { more.disabled = true; more.textContent = 'Loading…'; runSearch(search.q, true); };
+}
+async function playNow(it, row) {
+  if (!it) return;
+  row.classList.add('busy');
+  const r = await np.spotifyPlayNow(it.uri);
+  row.classList.remove('busy');
+  if (r && r.ok) { closeSheet(); note(`Playing ${it.title}`); }
+  else alertBox(r?.error || "Couldn't play that song.");
+}
+async function queueIt(it, btn) {
+  if (!it || btn.classList.contains('done')) return;
+  btn.disabled = true;
+  const r = await np.spotifyQueue(it.uri);
+  btn.disabled = false;
+  if (r && r.ok) { btn.classList.add('done'); btn.innerHTML = ICON.check; btn.title = 'Added to the queue'; note(`Added to queue: ${it.title}`); }
+  else alertBox(r?.error || "Couldn't add it to the queue.");
+}
+$('searchBtn').onclick = () => openSearch();
+
+// ---------- wrong lyrics: pick another match, or none ----------
+let lyrSeq = 0;
+function openLyricsPicker() {
+  if (!media.track) return;
+  const body = openSheet('lyrics', 'Pick the right lyrics', true);
+  body.innerHTML = `<div class="search-bar">${ICON.search}<input id="lq" placeholder="Search by artist and song name" spellcheck="false" autocomplete="off" /></div>
+    <div id="lres"></div>
+    <div class="sheet-actions"><button class="btn ghost small" id="lyAuto">Pick automatically</button><button class="btn ghost small" id="lyNone">No lyrics for this song</button></div>`;
+  const input = $('lq');
+  let timer = null;
+  input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => loadCandidates(input.value), 350); };
+  input.onkeydown = (e) => { if (e.key === 'Enter') { clearTimeout(timer); loadCandidates(input.value); } };
+  $('lyAuto').onclick = () => chooseLyrics('auto');
+  $('lyNone').onclick = () => chooseLyrics('none');
+  loadCandidates('');
+}
+async function loadCandidates(q) {
+  const seq = ++lyrSeq;
+  const box = $('lres');
+  if (!box) return;
+  q = String(q || '').trim();
+  box.innerHTML = sheetMsg('', q ? 'Searching…' : 'Looking for other versions of this song…');
+  const r = await np.lyricsCandidates(q);
+  if (seq !== lyrSeq || sheetKind !== 'lyrics') return;
+  if (!r || !r.ok) { box.innerHTML = sheetMsg("Couldn't reach the lyrics service", r?.error || 'Try again in a moment.', 'err'); return; }
+  if (!r.items.length) { box.innerHTML = sheetMsg('No matches', q ? 'Try a different spelling of the artist or the song.' : 'Search by artist and song name above.'); return; }
+  const dur = media.track?.durationMs || 0;
+  box.innerHTML = r.items.map((c) => {
+    const inUse = r.current != null && c.id === r.current;
+    const diff = dur && c.durationMs ? Math.round((c.durationMs - dur) / 1000) : null;
+    const len = c.durationMs ? fmt(c.durationMs) + (diff == null ? '' : Math.abs(diff) <= 2 ? ' · same length as this song'
+      : ` · ${Math.abs(diff) < 60 ? Math.abs(diff) + ' s' : fmt(Math.abs(diff) * 1000)} ${diff > 0 ? 'longer' : 'shorter'}`) : '';
+    const kind = c.instrumental ? 'Instrumental' : c.synced ? 'Synced' : 'Text only';
+    return `<button class="row-btn ${inUse ? 'on' : ''}" data-id="${esc(String(c.id))}">
+      <span class="row-main"><span class="row-title">${esc(c.title || 'Untitled')}</span><span class="row-sub">${esc([c.artist, c.album].filter(Boolean).join(' · '))}</span><span class="row-sub">${esc(len)}</span></span>
+      <span class="row-end">${inUse ? '<span class="tag use">In use</span>' : ''}<span class="tag">${kind}</span></span></button>`;
+  }).join('');
+  box.querySelectorAll('.row-btn[data-id]').forEach((b) => b.onclick = () => chooseLyrics(Number(b.dataset.id)));
+}
+async function chooseLyrics(v) {
+  const ok = await np.lyricsChoose(v);
+  closeSheet();
+  if (ok) note(v === 'none' ? 'Lyrics turned off for this song' : v === 'auto' ? 'Lyrics picked automatically again' : 'Lyrics changed for this song');
+}
+function renderLyFix() {
+  $('lyFix').hidden = !(media.track && (lyrics.status === 'found' || lyrics.status === 'instrumental'));
+}
+$('lyFix').onclick = () => openLyricsPicker();
+
+// ---------- listening stats ----------
+let statsData = null, statsTable = false, statsSeq = 0;
+const statsShowAll = { a: false, s: false };
+const RANGE_TEXT = { today: 'today', week: 'this week', month: 'this month', all: 'in total' };
+const WEEKDAY_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const statsRange = () => (['today', 'week', 'month', 'all'].includes(settings.statsRange) ? settings.statsRange : 'week');
+function fmtDur(ms) {
+  if (!ms || ms < 60000) return ms > 0 ? '<1 min' : '0 min';
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h} h ${r} min` : `${h} h`;
+}
+const fmtTick = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? `${m}m` : `${Math.round((m / 60) * 10) / 10}h`; };
+function niceMax(ms) {
+  const m = ms / 60000;
+  const steps = [2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 360, 480, 600, 720, 960, 1200, 1440, 1800, 2400, 3000, 3600, 4800, 6000, 7200, 9000, 12000, 15000, 18000, 24000, 30000, 36000, 48000, 60000];
+  return (steps.find((x) => x >= m) || Math.ceil(m / 60000) * 60000) * 60000;
+}
+// The tooltip / list name of one bar.
+function barName(d, i) {
+  const now = new Date();
+  if (d.range === 'today') return `${String(i).padStart(2, '0')}:00–${String((i + 1) % 24).padStart(2, '0')}:00`;
+  if (d.range === 'week') {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - d.chart.now + i);
+    return `${WEEKDAY_LONG[i]} ${day.getDate()} ${day.toLocaleString('en-GB', { month: 'short' })}${i === d.chart.now ? ' · today' : ''}`;
+  }
+  if (d.range === 'month') return `${i + 1} ${now.toLocaleString('en-GB', { month: 'long' })}${i === d.chart.now ? ' · today' : ''}`;
+  const m = new Date(now.getFullYear(), now.getMonth() - 11 + i, 1);
+  return m.toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+}
+function xLabelShown(d, i) {
+  const n = d.chart.values.length, now = d.chart.now;
+  if (i === now) return true;
+  if (d.range === 'today') return i % 6 === 0 && Math.abs(i - now) > 2;
+  if (d.range === 'month') return (i === 0 || (i + 1) % 5 === 0) && Math.abs(i - now) > 2 && i < n;
+  return true;
+}
+function xLabel(d, i) { return d.range === 'today' ? `${String(i).padStart(2, '0')}:00` : d.chart.labels[i]; }
+
+async function loadStats() {
+  const seq = ++statsSeq;
+  const body = $('stBody');
+  if (statsData) body.classList.add('loading'); // keep the old view while the new one loads
+  const d = await np.statsGet(statsRange());
+  if (seq !== statsSeq) return;
+  body.classList.remove('loading');
+  statsData = d;
+  renderStats();
+}
+function renderStats() {
+  const body = $('stBody');
+  const range = statsRange();
+  document.querySelectorAll('#stRange button').forEach((b) => b.classList.toggle('on', b.dataset.v === range));
+  if (settings.statsEnabled === false) {
+    body.innerHTML = '<div class="st-empty"><b>Listening stats are off</b>Turn them on to see how much you listen, and to what. They stay on this PC.<br><br><button class="btn primary" id="stTurnOn">Keep listening stats</button></div>';
+    $('stTurnOn').onclick = () => { settings.statsEnabled = true; np.setSettings({ statsEnabled: true }).then(loadStats); };
+    return;
+  }
+  const d = statsData;
+  if (!d) { body.innerHTML = ''; return; }
+  if (d.range !== range) return; // the new range is loading: keep showing the old one
+  const since = d.since ? new Date(d.since).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : null;
+  const foot = `<div class="st-foot"><span>Kept only on this PC${since ? ' · counting since ' + esc(since) : ''}</span></div>`;
+  if (!d.totalMs) {
+    body.innerHTML = `<div class="st-empty"><b>Nothing ${RANGE_TEXT[d.range]} yet</b>Play some music — listening time and plays are counted while it plays.</div>${foot}`;
+    return;
+  }
+  const mins = Math.round(d.totalMs / 60000);
+  const hero = mins < 1 ? '&lt;1<span class="u">min</span>'
+    : mins < 60 ? `${mins}<span class="u">min</span>`
+    : `${Math.floor(mins / 60)}<span class="u">h</span>${mins % 60}<span class="u">min</span>`;
+  const n = settings.large ? 8 : 5;
+  const c = d.chart;
+  const top = niceMax(Math.max(...c.values, 1));
+  const chart = statsTable
+    ? `<table class="st-table">${c.values.map((v, i) => `<tr class="${i === c.now ? 'now' : ''}"><td>${esc(barName(d, i))}</td><td>${esc(fmtDur(v))}</td></tr>`).join('')}</table>`
+    : `<div class="st-plot" id="stPlot">
+        <div class="st-grid" style="bottom:100%"><span>${fmtTick(top)}</span></div>
+        <div class="st-grid" style="bottom:50%"><span>${fmtTick(top / 2)}</span></div>
+        ${c.values.map((v, i) => `<div class="st-col" tabindex="0" data-i="${i}" aria-label="${esc(barName(d, i))}: ${esc(fmtDur(v))}">${v > 0 ? `<div class="st-bar" style="height:${Math.max(2.5, (v / top) * 100).toFixed(1)}%"></div>` : ''}</div>`).join('')}
+      </div>
+      <div class="st-x">${c.values.map((_, i) => `<span class="${i === c.now ? 'now' : ''}">${xLabelShown(d, i) ? esc(xLabel(d, i)) : ''}</span>`).join('')}</div>
+      <div class="st-tip" id="stTip" hidden></div>`;
+  const artists = d.topArtists.slice(0, statsShowAll.a ? 10 : n);
+  const maxA = d.topArtists[0]?.ms || 1;
+  const songs = d.topSongs.slice(0, statsShowAll.s ? 10 : n);
+  body.innerHTML = `
+    <div class="st-hero"><div class="st-big">${hero}</div>
+      <div class="st-sub">Listened ${RANGE_TEXT[d.range]}${d.avgPerDayMs ? ` · about ${fmtDur(d.avgPerDayMs)} a day` : ''}</div></div>
+    <div class="st-tiles">
+      <div class="st-tile"><div class="l">Plays</div><div class="v">${d.plays.toLocaleString('en-US')}</div></div>
+      <div class="st-tile"><div class="l">Songs</div><div class="v">${d.songs.toLocaleString('en-US')}</div></div>
+      <div class="st-tile"><div class="l">Artists</div><div class="v">${d.artists.toLocaleString('en-US')}</div></div>
+    </div>
+    <div class="st-card" id="stCard">
+      <div class="st-card-head"><span>Listening time by ${c.unit}</span><button class="btn link" id="stView">${statsTable ? 'Show chart' : 'Show as list'}</button></div>
+      ${chart}
+    </div>
+    ${artists.length ? `<div class="st-sec"><span>Top artists</span>${d.topArtists.length > n ? `<button class="btn link" data-more="a">${statsShowAll.a ? 'Show fewer' : 'Show more'}</button>` : ''}</div>
+    <div class="st-list">${artists.map((a, i) => `<div class="st-row"><span class="rk">${i + 1}</span><div class="nm"><div class="t1">${esc(a.name)}</div><div class="meter" style="width:${Math.max(2, Math.round((a.ms / maxA) * 100))}%"></div></div><span class="vl">${esc(fmtDur(a.ms))}</span></div>`).join('')}</div>` : ''}
+    ${songs.length ? `<div class="st-sec"><span>Top songs</span>${d.topSongs.length > n ? `<button class="btn link" data-more="s">${statsShowAll.s ? 'Show fewer' : 'Show more'}</button>` : ''}</div>
+    <div class="st-list">${songs.map((x, i) => `<div class="st-row song"><span class="rk">${i + 1}</span><span class="th">${x.art ? `<img src="${esc(x.art)}" alt="" loading="lazy">` : ''}</span><div class="nm"><div class="t1">${esc(x.title)}</div><div class="t2">${esc(x.artist)}</div></div><span class="vl">${x.plays ? `${x.plays} play${x.plays === 1 ? '' : 's'}<div class="t2">${esc(fmtDur(x.ms))}</div>` : esc(fmtDur(x.ms))}</span></div>`).join('')}</div>` : ''}
+    ${foot}`;
+  $('stView').onclick = () => { statsTable = !statsTable; renderStats(); };
+  body.querySelectorAll('[data-more]').forEach((b) => b.onclick = () => { statsShowAll[b.dataset.more] = !statsShowAll[b.dataset.more]; renderStats(); });
+  body.querySelectorAll('.th img').forEach((img) => { img.onerror = () => img.remove(); });
+  if (!statsTable) wireChartTips(d);
+}
+// One tooltip for the chart: on hover and on keyboard focus of each bar.
+function wireChartTips(d) {
+  const card = $('stCard'), tip = $('stTip');
+  const show = (col) => {
+    const i = Number(col.dataset.i);
+    tip.innerHTML = `<b>${esc(fmtDur(d.chart.values[i]))}</b>${esc(barName(d, i))}`;
+    tip.hidden = false;
+    const cr = card.getBoundingClientRect();
+    const r = col.getBoundingClientRect();
+    const bar = col.querySelector('.st-bar');
+    const y = (bar ? bar.getBoundingClientRect().top : r.bottom) - cr.top;
+    const half = tip.offsetWidth / 2;
+    const x = Math.min(Math.max(r.left + r.width / 2 - cr.left, half + 4), cr.width - half - 4);
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  };
+  const hide = () => { tip.hidden = true; };
+  card.querySelectorAll('.st-col').forEach((col) => {
+    col.addEventListener('pointerenter', () => show(col));
+    col.addEventListener('focus', () => show(col));
+    col.addEventListener('pointerleave', hide);
+    col.addEventListener('blur', hide);
+  });
+}
+document.querySelectorAll('#stRange button').forEach((b) => b.onclick = () => {
+  if (statsRange() === b.dataset.v) return;
+  settings.statsRange = b.dataset.v;
+  statsShowAll.a = statsShowAll.s = false;
+  document.querySelectorAll('#stRange button').forEach((x) => x.classList.toggle('on', x === b));
+  loadStats();
+  np.setSettings({ statsRange: b.dataset.v });
+});
+// Refresh while the Stats tab is on screen.
+setInterval(() => {
+  if (!document.hidden && shell.dataset.tab === 'stats' && shell.dataset.mode !== 'mini' && !document.querySelector('.st-col:hover, .st-col:focus')) loadStats();
+}, 30000);
+
+// ---------- desktop lyrics + stats settings ----------
+function renderDlControls() {
+  $('dlOn').checked = !!settings.desktopLyrics;
+  $('dlFill').checked = settings.desktopLyricsFill !== false;
+  $('dlNext').checked = settings.desktopLyricsNext !== false;
+  document.querySelectorAll('.seg[data-dl]').forEach((seg) => {
+    const v = String(settings[seg.dataset.dl] || (seg.dataset.dl === 'desktopLyricsSize' ? 'm' : 'outline'));
+    seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+  });
+  $('dlMove').textContent = settings.overlayMoving ? 'Done moving' : 'Move…';
+  $('dlMove').classList.toggle('primary', !!settings.overlayMoving);
+  $('dlMove').classList.toggle('ghost', !settings.overlayMoving);
+  $('stOn').checked = settings.statsEnabled !== false;
+  $('stBrowsers').checked = settings.statsBrowsers !== false;
+}
+$('dlOn').onchange = (e) => np.setSettings({ desktopLyrics: e.target.checked });
+$('dlFill').onchange = (e) => np.setSettings({ desktopLyricsFill: e.target.checked });
+$('dlNext').onchange = (e) => np.setSettings({ desktopLyricsNext: e.target.checked });
+document.querySelectorAll('.seg[data-dl] button').forEach((b) => b.onclick = () => {
+  const k = b.parentElement.dataset.dl;
+  settings[k] = b.dataset.v;
+  renderDlControls();
+  np.setSettings({ [k]: b.dataset.v });
+});
+$('dlMove').onclick = async () => {
+  settings.overlayMoving = await np.overlayMove(!settings.overlayMoving);
+  renderDlControls();
+  if (settings.overlayMoving) note('Drag the lyrics on your screen, then press Done');
+};
+$('dlReset').onclick = () => { np.setSettings({ desktopLyricsPos: null }); note('Desktop lyrics moved back to the bottom of the screen'); };
+$('stOn').onchange = (e) => np.setSettings({ statsEnabled: e.target.checked });
+$('stBrowsers').onchange = (e) => np.setSettings({ statsBrowsers: e.target.checked });
+let resetArmedAt = 0;
+$('stReset').onclick = async () => {
+  const b = $('stReset');
+  if (Date.now() - resetArmedAt > 4000) {
+    resetArmedAt = Date.now();
+    b.textContent = 'Click again to delete all stats';
+    setTimeout(() => { if (Date.now() - resetArmedAt >= 3900) b.textContent = 'Reset stats'; }, 4000);
+    return;
+  }
+  resetArmedAt = 0;
+  b.textContent = 'Reset stats';
+  await np.statsReset();
+  statsData = null;
+  note('Listening stats deleted');
+};
+
+// Used by the screenshot tests (mock mode only sends these).
+np.onUiAction((a) => {
+  if (!a) return;
+  if (a.tab) setTab(a.tab);
+  if (a.open === 'devices') openDevices();
+  if (a.open === 'playlists') openPlaylists();
+  if (a.open === 'search') { search.q = ''; openSearch(); if (a.q) { $('sq').value = a.q; runSearch(a.q, false, true); } }
+  if (a.open === 'lyrics') openLyricsPicker();
+  if (a.statsTable) { statsTable = true; renderStats(); }
+  if (a.scrollTo) document.querySelector(a.scrollTo)?.scrollIntoView();
+  if (a.hover) setTimeout(() => { document.querySelector(a.hover)?.dispatchEvent(new PointerEvent('pointerenter')); }, 300);
+});
+
 // ---------- wiring ----------
 let lastKey = null;
 function applyMiniLook() {
@@ -919,10 +1421,13 @@ function applyMiniLook() {
 }
 np.onSettings((s) => {
   if (offSaveTimer) s.lyricsOffsets = settings.lyricsOffsets; // a timing change is about to be saved
+  const statsChanged = s.statsEnabled !== settings.statsEnabled;
   settings = s;
+  if (!$('settings').hidden) renderDlControls();
+  if (statsChanged && shell.dataset.tab === 'stats') loadStats();
   applyMiniLook();
   applyAppearance();
-  if (s.mode && shell.dataset.mode !== s.mode) shell.dataset.mode = s.mode;
+  if (s.mode && shell.dataset.mode !== s.mode) { shell.dataset.mode = s.mode; renderSpotifyExtras(); }
   $('sizeBtn').classList.toggle('on', !!s.large);
   $('icoGrow').hidden = !!s.large; $('icoShrink').hidden = !s.large;
   $('pinBtn').classList.toggle('on', !!s.pinned);
@@ -934,7 +1439,7 @@ np.onMedia((m) => {
   media = m;
   needsTick = true;
   renderMedia();
-  if (m.key !== lastKey) { lastKey = m.key; renderLyrics(); }
+  if (m.key !== lastKey) { lastKey = m.key; renderLyrics(); renderLyFix(); if (sheetKind === 'lyrics' || sheetKind === 'playlists') closeSheet(); }
   if (!$('settings').hidden) { renderSpotifyStatus(); renderDiag(); }
 });
 np.onLyrics((l) => { lyrics = l; renderLyrics(); renderSyncUI(); lyricIdx = -1; lastMiniLyric = null; updateMiniLyricVisibility(); needsTick = true; });

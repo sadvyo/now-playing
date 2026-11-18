@@ -41,11 +41,57 @@ async function getJSON(url) {
 
 function pack(rec) {
   if (!rec) return null;
-  if (rec.instrumental) return { status: 'instrumental', synced: [], plain: '' };
+  const id = rec.id ?? null; // LRCLIB record id, so the picker can mark the one in use
+  if (rec.instrumental) return { status: 'instrumental', synced: [], plain: '', id };
   const synced = parseLRC(rec.syncedLyrics);
-  if (synced.length) return { status: 'found', synced, plain: rec.plainLyrics || '' };
-  if (rec.plainLyrics) return { status: 'found', synced: [], plain: rec.plainLyrics };
+  if (synced.length) return { status: 'found', synced, plain: rec.plainLyrics || '', id };
+  if (rec.plainLyrics) return { status: 'found', synced: [], plain: rec.plainLyrics, id };
   return null;
+}
+
+// ---------- "Wrong lyrics?" picker ----------
+// Other matches for a song (or for a search you typed), best first.
+async function candidates({ title, artist, durationMs }, { clean = false, query = '' } = {}) {
+  const q = clean ? cleanup(title, artist) : { title, artist };
+  const firstArtist = (q.artist || '').split(/,\s*|\s+&\s+/)[0];
+  const urls = query.trim()
+    ? [`https://lrclib.net/api/search?${new URLSearchParams({ q: query.trim() })}`]
+    : [
+        `https://lrclib.net/api/search?${new URLSearchParams({ track_name: q.title || '', artist_name: firstArtist })}`,
+        `https://lrclib.net/api/search?${new URLSearchParams({ q: `${firstArtist} ${q.title || ''}`.trim() })}`,
+      ];
+  const seen = new Map();
+  for (const url of urls) {
+    const data = await getJSON(url).catch(() => null);
+    for (const r of Array.isArray(data) ? data : []) if (r && r.id != null && !seen.has(r.id)) seen.set(r.id, r);
+    if (seen.size >= 12) break;
+  }
+  const dur = (durationMs || 0) / 1000;
+  return [...seen.values()]
+    .map((r) => ({
+      id: r.id,
+      title: r.trackName || r.name || '',
+      artist: r.artistName || '',
+      album: r.albumName || '',
+      durationMs: Math.round((r.duration || 0) * 1000),
+      synced: !!r.syncedLyrics,
+      instrumental: !!r.instrumental,
+      // closer length + synced first
+      score: (r.syncedLyrics ? 0 : 60) + (dur ? Math.abs((r.duration || 0) - dur) : 0),
+    }))
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 12)
+    .map(({ score, ...c }) => c);
+}
+
+// Lyrics for one specific LRCLIB record (the one you picked).
+async function byId(id) {
+  const key = `id:${id}`;
+  if (cache.has(key)) return cache.get(key);
+  const rec = await getJSON(`https://lrclib.net/api/get/${encodeURIComponent(id)}`);
+  const result = pack(rec) || { status: 'none', synced: [], plain: '', id };
+  remember(key, result);
+  return result;
 }
 
 async function fetchLyrics({ title, artist, album, durationMs }, { clean = false } = {}) {
@@ -87,4 +133,4 @@ async function fetchLyrics({ title, artist, album, durationMs }, { clean = false
   return result;
 }
 
-module.exports = { fetchLyrics, parseLRC, cleanup };
+module.exports = { fetchLyrics, parseLRC, cleanup, candidates, byId };
