@@ -1,6 +1,6 @@
 {
   "name": "nowplaying-popup",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "description": "Pop-up widget: now playing (Spotify + any Windows player) with synced lyrics, and live Claude Code sessions",
   "main": "src/main.js",
   "scripts": {

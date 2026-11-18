@@ -12,7 +12,19 @@ const SCOPES = [
   'user-modify-playback-state',
   'user-library-read',
   'user-library-modify',
+  'playlist-read-private',
+  'playlist-read-collaborative',
+  'playlist-modify-private',
+  'playlist-modify-public',
 ].join(' ');
+
+// Smallest picture that is still at least `min` px wide (Spotify lists 640/300/64).
+const pick = (imgs, min = 60) => {
+  const list = (imgs || []).filter((i) => i && i.url);
+  if (!list.length) return null;
+  const sorted = [...list].sort((a, b) => (a.width || 0) - (b.width || 0));
+  return (sorted.find((i) => (i.width || 0) >= min) || sorted[sorted.length - 1]).url;
+};
 
 const b64url = (buf) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
@@ -39,9 +51,120 @@ class Spotify extends EventEmitter {
     if (this.liked.size > 500) this.liked.delete(this.liked.keys().next().value);
   }
 
-  canLike() {
+  // true / false, or null when we don't know yet (no token refreshed since this version).
+  hasScope(name) {
     const sc = store.get('spotifyScopes');
-    return sc == null ? null : /user-library-modify/.test(sc); // null = not known yet
+    return sc == null ? null : sc.split(/\s+/).includes(name);
+  }
+  canLike() { return this.hasScope('user-library-modify'); }
+  canPlaylists() { return this.hasScope('playlist-modify-private'); }
+
+  // api() plus one retry when the token had just expired.
+  async _call(method, path, body) {
+    let r = await this.api(method, path, body);
+    if (r.status === 401) r = await this.api(method, path, body);
+    return r;
+  }
+
+  // Turn a Spotify reply into { ok } or a clear, human error.
+  _result(r) {
+    if (r.status >= 200 && r.status < 300) return { ok: true };
+    const reason = r.json?.error?.reason || '';
+    const msg = r.json?.error?.message || '';
+    if (r.status === 403 && /scope/i.test(msg)) return { ok: false, needsReconnect: true, error: 'Spotify needs one more permission — reconnect.' };
+    if (r.status === 403 && reason === 'PREMIUM_REQUIRED') return { ok: false, error: 'That needs Spotify Premium.' };
+    if (r.status === 404 && /device/i.test(reason + msg)) return { ok: false, noDevice: true, error: 'No Spotify device is open — start Spotify on your PC or phone first.' };
+    if (r.status === 429) return { ok: false, error: 'Spotify is busy — try again in a moment.' };
+    return { ok: false, error: msg ? `Spotify: ${msg}` : `Spotify said ${r.status}` };
+  }
+
+  // ---------- devices (Spotify Connect) ----------
+  async devices() {
+    const r = await this._call('GET', '/me/player/devices');
+    if (r.status !== 200) return { ...this._result(r), devices: [] };
+    const devices = (r.json?.devices || []).filter((d) => d && d.id).map((d) => ({
+      id: d.id, name: d.name, type: d.type, active: !!d.is_active, restricted: !!d.is_restricted,
+    }));
+    return { ok: true, devices };
+  }
+
+  async transfer(deviceId, play) {
+    const r = await this._call('PUT', '/me/player', { device_ids: [deviceId], play: !!play });
+    setTimeout(() => this.poll(), 800);
+    return this._result(r);
+  }
+
+  // ---------- search, play now, add to queue ----------
+  async search(q, offset = 0) {
+    q = String(q || '').trim();
+    if (!q) return { ok: true, items: [], total: 0, offset: 0 };
+    // Since Feb 2026 Development Mode apps get at most 10 results per request.
+    const params = new URLSearchParams({ q, type: 'track', limit: '10', offset: String(Math.max(0, offset | 0)) });
+    const r = await this._call('GET', `/search?${params}`);
+    if (r.status !== 200) return { ...this._result(r), items: [] };
+    const t = r.json?.tracks || {};
+    const items = (t.items || []).filter(Boolean).map((it) => ({
+      uri: it.uri,
+      title: it.name,
+      artist: (it.artists || []).map((a) => a.name).join(', '),
+      album: it.album?.name || '',
+      art: pick(it.album?.images, 60),
+      durationMs: it.duration_ms || 0,
+      explicit: !!it.explicit,
+    }));
+    return { ok: true, items, total: t.total || 0, offset, more: !!t.next };
+  }
+
+  // When nothing is active, Spotify answers 404: start it on the first usable device.
+  async _withDevice(method, path, body) {
+    let r = await this._call(method, path, body);
+    if (r.status === 404) {
+      const d = await this.devices();
+      const dev = (d.devices || []).find((x) => !x.restricted);
+      if (dev) r = await this._call(method, path + (path.includes('?') ? '&' : '?') + `device_id=${encodeURIComponent(dev.id)}`, body);
+    }
+    return r;
+  }
+
+  async playNow(uri) {
+    const r = await this._withDevice('PUT', '/me/player/play', { uris: [uri] });
+    setTimeout(() => this.poll(), 700);
+    return this._result(r);
+  }
+
+  async addToQueue(uri) {
+    const r = await this._withDevice('POST', `/me/player/queue?uri=${encodeURIComponent(uri)}`);
+    if (r.status >= 200 && r.status < 300) { this.queueAt = 0; this.queueFor = null; setTimeout(() => this.poll(), 500); }
+    return this._result(r);
+  }
+
+  // ---------- playlists ----------
+  async playlists(force = false) {
+    if (!force && this._pl && Date.now() - this._plAt < 5 * 60 * 1000) return { ok: true, items: this._pl };
+    if (!this.user?.id) await this._loadUser();
+    const out = [];
+    let path = '/me/playlists?limit=50';
+    for (let page = 0; page < 6 && path; page++) {
+      const r = await this._call('GET', path);
+      if (r.status !== 200) return { ...this._result(r), items: [] };
+      for (const p of r.json?.items || []) {
+        if (!p) continue;
+        // Songs can only be added to playlists you own or collaborate on.
+        if (!(p.collaborative || (this.user?.id && p.owner?.id === this.user.id))) continue;
+        out.push({ id: p.id, name: p.name, art: pick(p.images, 60), count: p.items?.total ?? p.tracks?.total ?? null, collaborative: !!p.collaborative });
+      }
+      path = r.json?.next ? r.json.next.replace(/^https:\/\/api\.spotify\.com\/v1/, '') : null;
+    }
+    this._pl = out; this._plAt = Date.now();
+    return { ok: true, items: out };
+  }
+
+  async addToPlaylist(playlistId, uri) {
+    // Feb 2026: POST /playlists/{id}/items (was /tracks).
+    const r = await this._call('POST', `/playlists/${encodeURIComponent(playlistId)}/items`, { uris: [uri] });
+    const res = this._result(r);
+    if (res.ok && this._pl) { const p = this._pl.find((x) => x.id === playlistId); if (p && typeof p.count === 'number') p.count++; }
+    return res;
   }
 
   async _checkLiked(uri) {
@@ -173,7 +296,7 @@ class Spotify extends EventEmitter {
   disconnect() {
     store.setSecret('spotifyRefresh', null);
     store.set({ spotifyScopes: null });
-    this.liked.clear(); this.queue = []; this.queueFor = null;
+    this.liked.clear(); this.queue = []; this.queueFor = null; this._pl = null;
     this.accessToken = null;
     this.user = null;
     this.playback = null;
@@ -235,7 +358,7 @@ class Spotify extends EventEmitter {
   async _loadUser() {
     try {
       const r = await this.api('GET', '/me');
-      if (r.status === 200) this.user = { name: r.json.display_name || r.json.id, product: r.json.product };
+      if (r.status === 200) this.user = { id: r.json.id, name: r.json.display_name || r.json.id };
       else if (r.status === 403) this.error = 'Spotify refused access (403). Add your account under "User Management" in your Spotify app, and note Development Mode needs Premium.';
     } catch (e) { this.error = e.message; }
   }
@@ -258,6 +381,7 @@ class Spotify extends EventEmitter {
           id: it.id,
           title: it.name,
           artist: isEp ? it.show?.name || '' : (it.artists || []).map((a) => a.name).join(', '),
+          artists: isEp ? [it.show?.name].filter(Boolean) : (it.artists || []).map((a) => a.name).filter(Boolean),
           album: isEp ? '' : it.album?.name || '',
           // Spotify lists 640, 300 and 64 px versions: the 300 px one is sharp enough here.
           art: (imgs.find((i) => i.width && i.width <= 320) || imgs[imgs.length - 1] || {}).url || imgs[0]?.url || null,
