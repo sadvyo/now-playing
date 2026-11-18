@@ -146,6 +146,8 @@ class LyricsOverlay {
       resizable: false,
       focusable: false,          // never steals focus from what you're doing
       skipTaskbar: true,
+      // A Windows "tool window": also kept out of Alt+Tab.
+      ...(process.platform === 'win32' ? { type: 'toolbar' } : {}),
       alwaysOnTop: true,
       hasShadow: false,
       fullscreenable: false,
