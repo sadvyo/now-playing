@@ -95,7 +95,8 @@ jobs:
             $bmp.Save((Join-Path $out "$name.png")); $g.Dispose(); $bmp.Dispose()
           }
           function Check($label) {
-            $h = [W]::FindWindow($null, 'Now Playing - desktop lyrics')
+            # [NullString]::Value, not $null: PowerShell would pass "" as the class name.
+            $h = [W]::FindWindow([NullString]::Value, 'Now Playing - desktop lyrics')
             if ($h -eq [IntPtr]::Zero) { Write-Host "${label}: desktop lyrics window NOT FOUND"; return }
             $ex = [W]::GetWindowLong($h, -20)
             $r = New-Object W+RECT
@@ -116,6 +117,8 @@ jobs:
             Start-Sleep -Seconds 10
             Check $mode
             Shot $mode
+            $log = Join-Path $env:NP_USERDATA 'debug.log'
+            if (Test-Path $log) { Get-Content $log | Select-Object -Last 5 | Write-Host }
             Stop-Process -Name 'Now Playing' -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 2
           }
