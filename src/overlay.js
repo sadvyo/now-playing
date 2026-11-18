@@ -153,7 +153,7 @@ class LyricsOverlay {
       maximizable: false,
       thickFrame: false,
       backgroundColor: '#00000000',
-      title: 'Now Playing — desktop lyrics',
+      title: 'Now Playing - desktop lyrics',
       webPreferences: {
         preload: path.join(__dirname, 'overlay-preload.js'),
         contextIsolation: true,

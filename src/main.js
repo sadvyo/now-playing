@@ -946,6 +946,7 @@ app.whenReady().then(() => {
     claude.scan();
     win.once('ready-to-show', () => { win.setPosition(0, 0); win.show(); });
     if (process.env.NP_OVERLAY) setSettings({ desktopLyrics: true, ...(process.env.NP_OVERLAY.startsWith('{') ? JSON.parse(process.env.NP_OVERLAY) : {}) });
+    if (process.env.NP_MOVE && !process.env.NP_SHOT) setTimeout(() => overlay.setMoving(true), 3000);
     if (process.env.NP_SHOT) {
       // Start the scripted steps once the page says it's ready (slow machines load later).
       const whenReady = (fn) => { const t = setInterval(() => { if (rendererReady) { clearInterval(t); setTimeout(fn, 1500); } }, 100); };
